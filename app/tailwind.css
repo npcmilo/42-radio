@@ -4,9 +4,150 @@
 
 html,
 body {
-  @apply bg-white dark:bg-gray-950;
+  @apply bg-black text-white;
+  color-scheme: dark;
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  letter-spacing: -0.03em;
+}
 
-  @media (prefers-color-scheme: dark) {
-    color-scheme: dark;
+/* Glassmorphism utilities - Black & White theme */
+@layer utilities {
+  .glass {
+    @apply backdrop-blur-xl bg-white/5 border border-white/10;
+  }
+  
+  .glass-card {
+    @apply backdrop-blur-lg bg-white/10 border border-white/15 shadow-2xl;
+  }
+  
+  .glass-button {
+    @apply backdrop-blur-md bg-white/10 border border-white/20 hover:bg-white/20 transition-all duration-200;
+  }
+  
+  .glass-header {
+    @apply backdrop-blur-xl bg-black/40 border-b border-white/10;
+  }
+  
+  .cd-shape {
+    clip-path: circle(50%);
+    aspect-ratio: 1;
+    position: relative;
+  }
+  
+  .cd-video-container {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 140%;
+    height: 140%;
+    border-radius: 50%;
+    overflow: hidden;
+  }
+  
+  .cd-video-container iframe,
+  .cd-video-container .youtube-player {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 177.78%; /* 16:9 aspect ratio scaled to fill circle */
+    height: 100%;
+  }
+  
+  .cd-video-container .youtube-player iframe {
+    width: 100% !important;
+    height: 100% !important;
+  }
+  
+  .cd-hole {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: transparent;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    z-index: 10;
+  }
+  
+  .cd-hole::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: black;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  /* Light mode CD hole */
+  .cd-hole.light {
+    border: 2px solid rgba(0, 0, 0, 0.3);
+  }
+  
+  .cd-hole.light::after {
+    background: white;
+    border: 1px solid rgba(0, 0, 0, 0.2);
+  }
+
+  /* Mini CD hole for carousel */
+  .cd-hole-mini {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    z-index: 10;
+  }
+  
+  .cd-hole-mini::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: black;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  /* Light mode mini CD hole */
+  .cd-hole-mini.light {
+    border: 1px solid rgba(0, 0, 0, 0.3);
+  }
+  
+  .cd-hole-mini.light::after {
+    background: white;
+    border: 1px solid rgba(0, 0, 0, 0.2);
+  }
+}
+
+/* Custom components for black & white theme */
+@layer components {
+  .gradient-bg {
+    background: radial-gradient(circle at 30% 40%, rgba(255, 255, 255, 0.03), transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(255, 255, 255, 0.02), transparent 50%),
+                radial-gradient(circle at 40% 80%, rgba(255, 255, 255, 0.01), transparent 50%),
+                black;
+  }
+  
+  .modern-shadow {
+    box-shadow: 
+      0 0 0 1px rgba(255, 255, 255, 0.1),
+      0 8px 16px -4px rgba(0, 0, 0, 0.4),
+      0 20px 25px -5px rgba(0, 0, 0, 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.1);
   }
 }

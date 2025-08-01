@@ -11,8 +11,8 @@ export const cleanupOldLogs = action({
     daysToKeep: v.optional(v.number()),
     maxLogsToDelete: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    return await withTiming(ctx, logger, "cleanup-old-logs", async () => {
+  handler: async (ctx, args): Promise<{ deleted: number; remaining: number; cutoffTime?: number; }> => {
+    return await withTiming(ctx, logger, "cleanup-old-logs", async (): Promise<{ deleted: number; remaining: number; cutoffTime?: number; }> => {
       const daysToKeep = args.daysToKeep || 7; // Keep 7 days by default
       const maxLogsToDelete = args.maxLogsToDelete || 10000; // Safety limit
       
@@ -25,12 +25,12 @@ export const cleanupOldLogs = action({
       }));
 
       // Get old logs in batches
-      const oldLogs = await ctx.runQuery(api.logger.getLogs, {
+      const oldLogs: any[] = await ctx.runQuery(api.logger.getLogs, {
         limit: maxLogsToDelete,
         since: 0, // From beginning of time
       });
 
-      const logsToDelete = oldLogs.filter(log => log.timestamp < cutoffTime);
+      const logsToDelete = oldLogs.filter((log: any) => log.timestamp < cutoffTime);
 
       if (logsToDelete.length === 0) {
         await logToDatabase(ctx, logger.info("No old logs to cleanup", {
@@ -97,8 +97,8 @@ export const cleanupOldHistory = action({
     daysToKeep: v.optional(v.number()),
     maxHistoryToDelete: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    return await withTiming(ctx, logger, "cleanup-old-history", async () => {
+  handler: async (ctx, args): Promise<{ deleted: number; remaining: number; cutoffTime?: number; }> => {
+    return await withTiming(ctx, logger, "cleanup-old-history", async (): Promise<{ deleted: number; remaining: number; cutoffTime?: number; }> => {
       const daysToKeep = args.daysToKeep || 30; // Keep 30 days by default
       const maxHistoryToDelete = args.maxHistoryToDelete || 5000; // Safety limit
       
@@ -111,11 +111,11 @@ export const cleanupOldHistory = action({
       }));
 
       // Get old history entries
-      const oldHistory = await ctx.runQuery(api.radio.getTrackHistory, {
+      const oldHistory: any[] = await ctx.runQuery(api.radio.getTrackHistory, {
         limit: maxHistoryToDelete,
       });
 
-      const historyToDelete = oldHistory.filter(entry => entry.playedAt < cutoffTime);
+      const historyToDelete = oldHistory.filter((entry: any) => entry.playedAt < cutoffTime);
 
       if (historyToDelete.length === 0) {
         await logToDatabase(ctx, logger.info("No old history to cleanup", {

@@ -356,6 +356,194 @@ npx convex dev &
 npm run dev &
 ```
 
+## Testing Transition Audio Feature
+
+The system now supports AI-generated DJ introductions that play before each track. Here's how to test and add tracks with transition audio:
+
+### Quick Testing Commands
+
+#### Test API Connections
+```bash
+# Test both Claude and ElevenLabs APIs
+npx convex run testing:testAPIConnections
+
+# Test Claude script generation only
+npx convex run scriptGenerator:testConnection
+
+# Test ElevenLabs voice synthesis only
+npx convex run elevenlabs:testConnection
+```
+
+#### Add Test Tracks with Transition Audio
+```bash
+# Add a specific track with AI-generated intro (requires YouTube video ID)
+npx convex run testing:addTestTrackWithTransition '{
+  "artist": "Aphex Twin",
+  "title": "Windowlicker", 
+  "youtubeId": "UBS4Gi1y_nc",
+  "year": 1999,
+  "label": "Warp Records",
+  "genre": "IDM",
+  "durationSeconds": 366,
+  "forceClaudeScript": true
+}'
+
+# Add a track with fallback script (no Claude)
+npx convex run testing:addTestTrackWithTransition '{
+  "artist": "Boards of Canada",
+  "title": "Roygbiv",
+  "youtubeId": "yT0gRc2c2wQ", 
+  "year": 1998,
+  "forceClaudeScript": false
+}'
+```
+
+#### Test Transition Audio Generation Only
+```bash
+# Test script and audio generation without adding to queue
+npx convex run testing:testTransitionAudioGeneration '{
+  "artist": "Burial",
+  "title": "Archangel",
+  "year": 2007,
+  "genre": "Dubstep",
+  "useClaudeScript": true
+}'
+```
+
+### Queue Management & Monitoring
+
+#### Check Queue Status with Transition Audio Info
+```bash
+# View queue with transition audio status
+npx convex run testing:getQueueWithTransitionStatus '{"limit": 10}'
+
+# Standard queue view
+npx convex run radio:getQueue '{"limit": 5}'
+
+# Queue health metrics
+npx convex run queueManager:getQueueHealth
+```
+
+#### Generate Transition Audio for Existing Queue Items
+```bash
+# Get queue first to find item IDs
+npx convex run radio:getQueue '{"limit": 10}'
+
+# Generate transition audio for specific queue item
+npx convex run testing:generateTransitionForQueueItem '{
+  "queueItemId": "QUEUE_ITEM_ID_HERE",
+  "useClaudeScript": true
+}'
+```
+
+#### Clean Up for Testing
+```bash
+# Clear all transition audio from queue (controllers only)
+npx convex run testing:clearAllTransitionAudio '{"userId": "USER_ID_HERE"}'
+
+# Clear entire queue (controllers only)
+npx convex run queueManager:clearQueue '{"userId": "USER_ID_HERE"}'
+```
+
+### Popular Test Tracks with YouTube IDs
+
+Here are some good tracks for testing (all confirmed working YouTube IDs):
+
+```bash
+# Electronic/IDM
+npx convex run testing:addTestTrackWithTransition '{"artist": "Aphex Twin", "title": "Windowlicker", "youtubeId": "UBS4Gi1y_nc", "year": 1999}'
+npx convex run testing:addTestTrackWithTransition '{"artist": "Boards of Canada", "title": "Roygbiv", "youtubeId": "yT0gRc2c2wQ", "year": 1998}'
+npx convex run testing:addTestTrackWithTransition '{"artist": "Autechre", "title": "Amber", "youtubeId": "3-7FfLt3b2M", "year": 1994}'
+
+# Ambient/Experimental  
+npx convex run testing:addTestTrackWithTransition '{"artist": "Brian Eno", "title": "Music for Airports 1/1", "youtubeId": "vNwYtllyt3Q", "year": 1978}'
+npx convex run testing:addTestTrackWithTransition '{"artist": "Tim Hecker", "title": "Ravedeath, 1972", "youtubeId": "1NkZTtBhkKY", "year": 2011}'
+
+# Underground/Obscure
+npx convex run testing:addTestTrackWithTransition '{"artist": "Burial", "title": "Archangel", "youtubeId": "IlEkvbRmfrA", "year": 2007}'
+npx convex run testing:addTestTrackWithTransition '{"artist": "Gas", "title": "Pop 4", "youtubeId": "MQDPlAqZLxM", "year": 2000}'
+```
+
+### Frontend Testing
+
+1. **Start Development Server**:
+   ```bash
+   npm run dev
+   npx convex dev
+   ```
+
+2. **Watch for Transition Audio**:
+   - Sign in and wait for tracks to advance
+   - Look for "🎤 DJ Introduction..." indicator
+   - Audio should play before YouTube track starts
+   - Check browser console for any errors
+
+3. **Manual Track Advancement** (Controllers only):
+   - Use skip controls to advance to tracks with transition audio
+   - Verify seamless transition from DJ intro to music
+
+### Monitoring Transition Audio
+
+#### View Logs
+```bash
+# Monitor all transition audio activity
+npx convex run logger:getLogs '{"component": "script-generator", "limit": 20}'
+npx convex run logger:getLogs '{"component": "elevenlabs", "limit": 20}'
+
+# Check for errors
+npx convex run logger:getRecentErrors '{"limit": 10}'
+
+# Monitor queue manager activity
+npx convex run logger:getLogs '{"component": "queue-manager", "limit": 20}'
+```
+
+#### Performance Monitoring for Transition Audio
+```bash
+# Look for slow operations (>2 seconds)
+npx convex run logger:getLogs '{"limit": 100}' | jq '.[] | select(.metadata.duration_ms > 2000)'
+
+# Check transition audio success rates
+npx convex run logger:getLogs '{"component": "script-generator", "limit": 50}' | jq '.[] | select(.message | contains("generated"))'
+```
+
+### Troubleshooting Transition Audio
+
+#### Common Issues
+
+1. **No Transition Audio Generated**:
+   ```bash
+   # Check API keys are set
+   echo $ANTHROPIC_API_KEY
+   echo $ELEVENLABS_API_KEY
+   
+   # Test API connections
+   npx convex run testing:testAPIConnections
+   ```
+
+2. **Audio Not Playing in Browser**:
+   - Check browser console for audio play errors
+   - Verify audio data URL format in network tab
+   - Test with different browsers (Chrome, Firefox, Safari)
+
+3. **Queue Empty**:
+   ```bash
+   # Force queue replenishment
+   npx convex run queueManager:discoverAndQueueTracks '{"count": 5}'
+   
+   # Check Discogs API
+   npx convex run discogs:testConnection
+   ```
+
+#### Debug Environment Variables
+```bash
+# Verify all required environment variables
+echo "Claude API: $ANTHROPIC_API_KEY"
+echo "ElevenLabs: $ELEVENLABS_API_KEY" 
+echo "Discogs: $DISCOGS_API_TOKEN"
+echo "YouTube: $VITE_YOUTUBE_API_KEY"
+echo "Clerk: $VITE_CLERK_PUBLISHABLE_KEY"
+```
+
 ## Performance Monitoring
 
 ### Key Metrics to Monitor

@@ -6,7 +6,8 @@ import { api } from "./_generated/api";
 const logger = new Logger("queue-manager");
 
 // Configuration constants
-const MIN_QUEUE_SIZE = 5; // Minimum tracks to maintain in queue
+const MIN_QUEUE_SIZE = 5; // Absolute minimum tracks (emergency level)
+const TARGET_QUEUE_SIZE = 8; // Optimal queue size to maintain
 const MAX_QUEUE_SIZE = 20; // Maximum tracks to avoid over-queuing
 const DISCOVERY_BATCH_SIZE = 10; // How many tracks to discover at once
 
@@ -36,7 +37,7 @@ export const discoverAndQueueTracks = action({
         return { added: 0, skipped: 0, errors: 0, reason: "queue_full" };
       }
 
-      // Get tracks from Discogs
+      // Get tracks from Discogs using smartSearch (which now uses pagination)
       const discogsResults = await ctx.runAction(api.discogs.smartSearch, {
         count: requestedCount,
       });
@@ -65,7 +66,7 @@ export const discoverAndQueueTracks = action({
           const youtubeMatch = await ctx.runAction(api.youtube.findBestMatch, {
             artist: track.artist,
             title: track.title,
-            year: track.year,
+            year: typeof track.year === 'string' ? parseInt(track.year) : track.year,
             minDurationSeconds: 60, // At least 1 minute
             maxDurationSeconds: 1200, // At most 20 minutes
           });
@@ -80,14 +81,25 @@ export const discoverAndQueueTracks = action({
             continue;
           }
 
+          // Skip transition audio generation during discovery
+          // Transition audio will be generated with proper context when track is about to play
+          await logToDatabase(ctx, logger.debug("Skipping transition audio during discovery", {
+            discogsId: track.discogsId,
+            artist: track.artist,
+            title: track.title,
+            reason: "will_generate_with_context_on_play",
+          }));
+
           // Add to queue
           const queueId = await ctx.runMutation(api.radio.addToQueue, {
             discogsId: track.discogsId,
             title: track.title,
             artist: track.artist,
-            year: track.year,
+            year: typeof track.year === 'string' ? parseInt(track.year) : track.year,
             label: track.label,
             youtubeId: youtubeMatch.videoId,
+            durationSeconds: youtubeMatch.durationSeconds,
+            transitionAudioUrl: undefined, // Will be generated with context when track advances
           });
 
           await logToDatabase(ctx, logger.info("Track added to queue", {
@@ -97,6 +109,7 @@ export const discoverAndQueueTracks = action({
             title: track.title,
             youtubeId: youtubeMatch.videoId,
             youtubeDuration: youtubeMatch.durationSeconds,
+            hasTransitionAudio: false, // Will be generated with context when track advances
           }));
 
           addedCount++;
@@ -146,27 +159,29 @@ export const discoverAndQueueTracks = action({
 // Maintain optimal queue size
 export const maintainQueue = action({
   args: {},
-  handler: async (ctx) => {
-    return await withTiming(ctx, logger, "maintain-queue", async () => {
-      const queueStatus = await ctx.runQuery(api.radio.getQueueStatus);
+  handler: async (ctx): Promise<any> => {
+    return await withTiming(ctx, logger, "maintain-queue", async (): Promise<any> => {
+      const queueStatus: any = await ctx.runQuery(api.radio.getQueueStatus);
 
       await logToDatabase(ctx, logger.debug("Queue maintenance check", {
         currentQueueSize: queueStatus.queueLength,
         minQueueSize: MIN_QUEUE_SIZE,
+        targetQueueSize: TARGET_QUEUE_SIZE,
         hasCurrentTrack: queueStatus.hasCurrentTrack,
       }));
 
-      // If queue is too small, add more tracks
-      if (queueStatus.queueLength < MIN_QUEUE_SIZE) {
-        const tracksNeeded = MIN_QUEUE_SIZE - queueStatus.queueLength + 2; // Add a few extra
+      // If queue is below target size, add tracks to reach target + buffer
+      if (queueStatus.queueLength < TARGET_QUEUE_SIZE) {
+        const tracksNeeded = TARGET_QUEUE_SIZE - queueStatus.queueLength + 2; // Add buffer for target
         
-        await logToDatabase(ctx, logger.info("Queue below minimum size, adding tracks", {
+        await logToDatabase(ctx, logger.info("Queue below target size, adding tracks", {
           currentSize: queueStatus.queueLength,
+          targetSize: TARGET_QUEUE_SIZE,
           minSize: MIN_QUEUE_SIZE,
           tracksNeeded,
         }));
 
-        const discoveryResult = await ctx.runAction(api.queueManager.discoverAndQueueTracks, {
+        const discoveryResult: any = await ctx.runAction(api.queueManager.discoverAndQueueTracks, {
           count: tracksNeeded,
         });
 
@@ -184,7 +199,7 @@ export const maintainQueue = action({
           queueLength: queueStatus.queueLength,
         }));
 
-        const newTrackId = await ctx.runMutation(api.radio.advanceToNextTrack);
+        const newTrackId: any = await ctx.runAction(api.radio.advanceToNextTrackWithContext);
 
         return {
           action: "advance",
@@ -210,22 +225,22 @@ export const maintainQueue = action({
 });
 
 // Skip current track (controller action)
-export const skipCurrentTrack = mutation({
+export const skipCurrentTrack = action({
   args: {
     userId: v.id("users"),
     reason: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const startTime = Date.now();
 
     try {
       // Verify user is a controller
-      const user = await ctx.db.get(args.userId);
+      const user = await ctx.runQuery(api.users.getUserById, { userId: args.userId });
       if (!user || user.role !== "controller") {
         throw new Error("Only controllers can skip tracks");
       }
 
-      const currentTrack = await ctx.db.query("currentTrack").first();
+      const currentTrack = await ctx.runQuery(api.radio.getCurrentTrack);
       if (!currentTrack) {
         await logToDatabase(ctx, logger.warn("Skip requested but no current track", {
           userId: args.userId,
@@ -235,15 +250,14 @@ export const skipCurrentTrack = mutation({
       }
 
       // Record the skip as feedback
-      await ctx.db.insert("feedback", {
+      await ctx.runMutation(api.users.recordFeedback, {
         userId: args.userId,
         discogsId: currentTrack.discogsId,
         type: "skip",
-        createdAt: Date.now(),
       });
 
-      // Advance to next track
-      const newTrackId = await ctx.runAction(api.radio.advanceToNextTrack);
+      // Advance to next track with proper context
+      const newTrackId: any = await ctx.runAction(api.radio.advanceToNextTrackWithContext);
 
       const duration = Date.now() - startTime;
       await logToDatabase(ctx, logger.info("Track skipped by controller", {
@@ -277,33 +291,34 @@ export const skipCurrentTrack = mutation({
 });
 
 // Clear queue (admin/controller action)
-export const clearQueue = mutation({
+export const clearQueue = action({
   args: {
     userId: v.id("users"),
     keepCount: v.optional(v.number()), // Keep this many tracks at the front
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{
+    success: boolean;
+    originalSize: number;
+    newSize: number;
+    removedCount: number;
+  }> => {
     const startTime = Date.now();
 
     try {
       // Verify user is a controller
-      const user = await ctx.db.get(args.userId);
+      const user = await ctx.runQuery(api.users.getUserById, { userId: args.userId });
       if (!user || user.role !== "controller") {
         throw new Error("Only controllers can clear queue");
       }
 
-      const queue = await ctx.db
-        .query("queue")
-        .withIndex("by_createdAt")
-        .order("asc")
-        .collect();
+      const queue: Array<any> = await ctx.runQuery(api.radio.getQueue, { limit: 100 });
 
       const keepCount = args.keepCount || 0;
       const tracksToRemove = queue.slice(keepCount);
 
       // Remove tracks
       for (const track of tracksToRemove) {
-        await ctx.db.delete(track._id);
+        await ctx.runMutation(api.radio.removeFromQueue, { trackId: track._id });
       }
 
       const duration = Date.now() - startTime;
@@ -337,21 +352,25 @@ export const clearQueue = mutation({
 // Get queue health metrics
 export const getQueueHealth = action({
   args: {},
-  handler: async (ctx) => {
-    return await withTiming(ctx, logger, "queue-health-check", async () => {
-      const queueStatus = await ctx.runQuery(api.radio.getQueueStatus);
-      const queue = await ctx.runQuery(api.radio.getQueue, { limit: 50 });
+  handler: async (ctx): Promise<any> => {
+    return await withTiming(ctx, logger, "queue-health-check", async (): Promise<any> => {
+      const queueStatus: any = await ctx.runQuery(api.radio.getQueueStatus);
+      const queue: any = await ctx.runQuery(api.radio.getQueue, { limit: 50 });
 
       // Calculate health metrics
-      const health = {
+      const health: any = {
         queueLength: queueStatus.queueLength,
         hasCurrentTrack: queueStatus.hasCurrentTrack,
-        isHealthy: queueStatus.queueLength >= MIN_QUEUE_SIZE && queueStatus.hasCurrentTrack,
-        needsReplenishment: queueStatus.queueLength < MIN_QUEUE_SIZE,
+        isHealthy: queueStatus.queueLength >= TARGET_QUEUE_SIZE && queueStatus.hasCurrentTrack,
+        needsReplenishment: queueStatus.queueLength < TARGET_QUEUE_SIZE,
+        isCritical: queueStatus.queueLength < MIN_QUEUE_SIZE,
         isOverfull: queueStatus.queueLength > MAX_QUEUE_SIZE,
         estimatedPlaytimeMinutes: 0,
         oldestTrackAge: 0,
         newestTrackAge: 0,
+        targetQueueSize: TARGET_QUEUE_SIZE,
+        minQueueSize: MIN_QUEUE_SIZE,
+        maxQueueSize: MAX_QUEUE_SIZE,
       };
 
       if (queue.length > 0) {
@@ -360,7 +379,7 @@ export const getQueueHealth = action({
         
         // Calculate track ages
         const now = Date.now();
-        const trackAges = queue.map(track => now - track.createdAt);
+        const trackAges = queue.map((track: any) => now - track.createdAt);
         health.oldestTrackAge = Math.max(...trackAges);
         health.newestTrackAge = Math.min(...trackAges);
       }

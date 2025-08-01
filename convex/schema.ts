@@ -10,6 +10,7 @@ export default defineSchema({
     year: v.optional(v.number()),
     label: v.optional(v.string()),
     youtubeId: v.string(), // ID for the YouTube player
+    durationSeconds: v.optional(v.number()), // Duration of the YouTube video in seconds
     startedAt: v.number(), // UTC timestamp when the track began, for client sync
     transitionAudioUrl: v.optional(v.string()), // URL to the AI voiceover
   }),
@@ -20,6 +21,7 @@ export default defineSchema({
     title: v.string(),
     artist: v.string(),
     youtubeId: v.string(),
+    durationSeconds: v.optional(v.number()), // Duration of the YouTube video in seconds
     playedAt: v.number(), // UTC timestamp
     likedBy: v.optional(v.array(v.id("users"))), // Track who liked it
   }).index("by_discogsId", ["discogsId"]), // Index for fast deduplication checks
@@ -32,6 +34,7 @@ export default defineSchema({
     year: v.optional(v.number()),
     label: v.optional(v.string()),
     youtubeId: v.string(),
+    durationSeconds: v.optional(v.number()), // Duration of the YouTube video in seconds
     createdAt: v.number(), // Timestamp when added to the queue
     transitionAudioUrl: v.optional(v.string()), // Pre-generated voiceover URL
   }).index("by_createdAt", ["createdAt"]), // To ensure FIFO playback order

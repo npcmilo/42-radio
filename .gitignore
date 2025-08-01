@@ -2,6 +2,13 @@ node_modules
 
 /.cache
 /build
-.env
 
+# Environment variables
+.env
 .env.local
+.env.production
+.env.development
+.env.test
+
+# Convex deployment key (already in .env but extra protection)
+convex.json

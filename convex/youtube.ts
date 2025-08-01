@@ -46,6 +46,7 @@ interface YouTubeVideoDetails {
     description: string;
     channelTitle: string;
     publishedAt: string;
+    liveBroadcastContent?: string;
   };
   contentDetails: {
     duration: string; // ISO 8601 format like "PT4M13S"
@@ -81,155 +82,82 @@ export const searchYouTube = action({
   },
   handler: async (ctx, args) => {
     return await withTiming(ctx, logger, "youtube-search", async () => {
-      const apiKey = process.env.VITE_YOUTUBE_API_KEY;
+      const apiKey = process.env.YOUTUBE_API_KEY;
       if (!apiKey) {
-        throw new Error("VITE_YOUTUBE_API_KEY not configured");
+        throw new Error("YOUTUBE_API_KEY not configured");
       }
 
-      // Build search query - prioritize official releases and clean audio
-      const queries = [
-        `"${args.artist}" "${args.title}"`, // Exact match
-        `${args.artist} ${args.title} official`, // Prefer official releases
-        `${args.artist} ${args.title} audio`, // Prefer audio-only versions
-        `${args.artist} ${args.title}`, // Fallback broad search
-      ];
+      // Simple single search query: just "artist title"
+      const query = `${args.artist} ${args.title}`;
+      
+      const params = new URLSearchParams({
+        part: "snippet",
+        type: "video",
+        q: query,
+        maxResults: (args.maxResults || 1).toString(), // Default to 1 result
+        videoCategoryId: "10", // Music category
+        key: apiKey,
+      });
 
-      let bestResults: YouTubeSearchItem[] = [];
-      let queryUsed = "";
-
-      // Try queries in order of preference
-      for (const query of queries) {
-        try {
-          const params = new URLSearchParams({
-            part: "snippet",
-            type: "video",
-            q: query,
-            maxResults: (args.maxResults || 10).toString(),
-            videoCategoryId: "10", // Music category
-            key: apiKey,
-          });
-
-          if (args.durationFilter) {
-            params.append("videoDuration", args.durationFilter);
-          }
-
-          const searchUrl = `https://www.googleapis.com/youtube/v3/search?${params.toString()}`;
-
-          await logToDatabase(ctx, logger.debug("Trying YouTube search query", {
-            query,
-            artist: args.artist,
-            title: args.title,
-            searchUrl: searchUrl.replace(apiKey, "***"),
-          }));
-
-          const response = await fetch(searchUrl);
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            await logToDatabase(ctx, logger.warn("YouTube search query failed", {
-              query,
-              status: response.status,
-              statusText: response.statusText,
-              errorBody: errorText,
-            }));
-            continue; // Try next query
-          }
-
-          const data: YouTubeSearchResponse = await response.json();
-
-          if (data.items && data.items.length > 0) {
-            bestResults = data.items;
-            queryUsed = query;
-            
-            await logToDatabase(ctx, logger.info("YouTube search successful", {
-              query: queryUsed,
-              resultsFound: data.items.length,
-              totalResults: data.pageInfo.totalResults,
-            }));
-            break; // Found results, stop trying other queries
-          }
-
-        } catch (error) {
-          await logToDatabase(ctx, logger.error("YouTube search query error", {
-            query,
-            error: error instanceof Error ? error.message : String(error),
-          }));
-          continue; // Try next query
-        }
+      if (args.durationFilter) {
+        params.append("videoDuration", args.durationFilter);
       }
 
-      if (bestResults.length === 0) {
-        await logToDatabase(ctx, logger.warn("No YouTube results found for track", {
-          artist: args.artist,
-          title: args.title,
-          queriesTried: queries.length,
+      const searchUrl = `https://www.googleapis.com/youtube/v3/search?${params.toString()}`;
+
+      await logToDatabase(ctx, logger.debug("YouTube search", {
+        query,
+        artist: args.artist,
+        title: args.title,
+        maxResults: args.maxResults || 1,
+      }));
+
+      const response = await fetch(searchUrl);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        await logToDatabase(ctx, logger.warn("YouTube search failed", {
+          query,
+          status: response.status,
+          statusText: response.statusText,
+          errorBody: errorText,
         }));
         return [];
       }
 
-      // Process and score results
-      const processedResults = bestResults.map((item, index) => {
-        const title = item.snippet.title.toLowerCase();
-        const channelTitle = item.snippet.channelTitle.toLowerCase();
-        const description = item.snippet.description.toLowerCase();
-        
-        // Scoring algorithm to find best match
-        let score = 0;
-        
-        // Prefer official channels
-        if (channelTitle.includes("official") || 
-            channelTitle.includes(args.artist.toLowerCase()) ||
-            channelTitle.includes("records") ||
-            channelTitle.includes("music")) {
-          score += 10;
-        }
-        
-        // Prefer videos with "official" in title
-        if (title.includes("official")) score += 8;
-        if (title.includes("audio")) score += 5;
-        if (title.includes("video")) score += 3;
-        
-        // Penalize covers, remixes, live versions (unless it's what we want)
-        if (title.includes("cover") && !args.title.toLowerCase().includes("cover")) score -= 5;
-        if (title.includes("remix") && !args.title.toLowerCase().includes("remix")) score -= 3;
-        if (title.includes("live") && !args.title.toLowerCase().includes("live")) score -= 2;
-        if (title.includes("karaoke")) score -= 10;
-        if (title.includes("lyrics")) score -= 2;
-        
-        // Prefer newer uploads (slight bias)
-        const uploadDate = new Date(item.snippet.publishedAt);
-        const daysSinceUpload = (Date.now() - uploadDate.getTime()) / (1000 * 60 * 60 * 24);
-        if (daysSinceUpload < 365) score += 1; // Uploaded within last year
-        
-        return {
-          videoId: item.id.videoId,
-          title: item.snippet.title,
-          description: item.snippet.description,
-          channelTitle: item.snippet.channelTitle,
-          thumbnailUrl: item.snippet.thumbnails.medium.url,
-          publishedAt: item.snippet.publishedAt,
-          score,
-          searchRank: index, // Original search ranking
-        };
-      });
+      const data: YouTubeSearchResponse = await response.json();
+      
+      if (!data.items || data.items.length === 0) {
+        await logToDatabase(ctx, logger.warn("No YouTube results found", {
+          artist: args.artist,
+          title: args.title,
+          query,
+        }));
+        return [];
+      }
 
-      // Sort by score (descending) and log the ranking
-      const rankedResults = processedResults.sort((a, b) => b.score - a.score);
+      const bestResults = data.items;
 
-      await logToDatabase(ctx, logger.info("YouTube results processed and ranked", {
-        artist: args.artist,
-        title: args.title,
-        queryUsed,
-        totalResults: rankedResults.length,
-        topResult: rankedResults[0] ? {
-          videoId: rankedResults[0].videoId,
-          title: rankedResults[0].title,
-          score: rankedResults[0].score,
-          channelTitle: rankedResults[0].channelTitle,
-        } : null,
+      // Results found - log success
+      await logToDatabase(ctx, logger.info("YouTube search successful", {
+        query,
+        resultsFound: bestResults.length,
+        totalResults: data.pageInfo.totalResults,
       }));
 
-      return rankedResults;
+      // Simple processing - just return the result(s) as-is
+      const processedResults = bestResults.map((item, index) => ({
+        videoId: item.id.videoId,
+        title: item.snippet.title,
+        description: item.snippet.description,
+        channelTitle: item.snippet.channelTitle,
+        thumbnailUrl: item.snippet.thumbnails.medium.url,
+        publishedAt: item.snippet.publishedAt,
+        score: 100, // Simple default score
+        searchRank: index,
+      }));
+
+      return processedResults;
     }, {
       artist: args.artist,
       title: args.title,
@@ -245,9 +173,9 @@ export const getVideoDetails = action({
   },
   handler: async (ctx, args) => {
     return await withTiming(ctx, logger, "youtube-video-details", async () => {
-      const apiKey = process.env.VITE_YOUTUBE_API_KEY;
+      const apiKey = process.env.YOUTUBE_API_KEY;
       if (!apiKey) {
-        throw new Error("VITE_YOUTUBE_API_KEY not configured");
+        throw new Error("YOUTUBE_API_KEY not configured");
       }
 
       const params = new URLSearchParams({
@@ -305,7 +233,7 @@ export const getVideoDetails = action({
         caption: video.contentDetails.caption,
         viewCount: parseInt(video.statistics.viewCount),
         likeCount: video.statistics.likeCount ? parseInt(video.statistics.likeCount) : undefined,
-        isLive: video.snippet.liveBroadcastContent !== "none",
+        isLive: video.snippet.liveBroadcastContent !== "none" && video.snippet.liveBroadcastContent !== undefined,
       };
 
       await logToDatabase(ctx, logger.info("YouTube video details retrieved", {
@@ -324,18 +252,43 @@ export const getVideoDetails = action({
   },
 });
 
-// Find the best YouTube match for a Discogs track
+// Find the best YouTube match for a Discogs track using progressive search strategy
 export const findBestMatch = action({
   args: {
     artist: v.string(),
     title: v.string(),
     year: v.optional(v.number()),
-    minDurationSeconds: v.optional(v.number()), // Filter out very short videos
-    maxDurationSeconds: v.optional(v.number()), // Filter out very long videos
+    minDurationSeconds: v.optional(v.number()),
+    maxDurationSeconds: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    return await withTiming(ctx, logger, "youtube-best-match", async () => {
-      await logToDatabase(ctx, logger.info("Finding best YouTube match", {
+  handler: async (ctx, args): Promise<{
+    videoId: string;
+    title: string;
+    channelTitle: string;
+    thumbnailUrl: string;
+    duration: string;
+    durationSeconds: number;
+    viewCount: number;
+    score: number;
+    publishedAt: string;
+  } | null> => {
+    return await withTiming(ctx, logger, "youtube-best-match", async (): Promise<{
+      videoId: string;
+      title: string;
+      channelTitle: string;
+      thumbnailUrl: string;
+      duration: string;
+      durationSeconds: number;
+      viewCount: number;
+      score: number;
+      publishedAt: string;
+    } | null> => {
+      const apiKey = process.env.YOUTUBE_API_KEY;
+      if (!apiKey) {
+        throw new Error("YOUTUBE_API_KEY not configured");
+      }
+
+      await logToDatabase(ctx, logger.info("Finding YouTube match with progressive search", {
         artist: args.artist,
         title: args.title,
         year: args.year,
@@ -343,105 +296,180 @@ export const findBestMatch = action({
         maxDurationSeconds: args.maxDurationSeconds,
       }));
 
-      // Search for candidates
-      const searchResults = await ctx.runAction(api.youtube.searchYouTube, {
-        artist: args.artist,
-        title: args.title,
-        maxResults: 5,
-        durationFilter: "medium", // Prefer medium length videos (4-20 minutes)
-      });
+      // Progressive search queries from most specific to broad
+      const searchQueries = [
+        `"${args.artist}" "${args.title}" official`,  // Most specific - official videos
+        `"${args.artist}" "${args.title}" topic`,     // YouTube auto-generated topic videos
+        `${args.artist} ${args.title}`                // Broad fallback
+      ];
 
-      if (searchResults.length === 0) {
-        await logToDatabase(ctx, logger.warn("No YouTube candidates found", {
-          artist: args.artist,
-          title: args.title,
-        }));
-        return null;
-      }
-
-      // Get detailed info for top candidates and apply duration filtering
-      const validCandidates = [];
-
-      for (const candidate of searchResults.slice(0, 3)) { // Check top 3 candidates
+      for (let i = 0; i < searchQueries.length; i++) {
+        const query = searchQueries[i];
+        
         try {
-          const details = await ctx.runAction(api.youtube.getVideoDetails, {
-            videoId: candidate.videoId,
+          await logToDatabase(ctx, logger.debug("Trying YouTube search query", {
+            queryIndex: i + 1,
+            totalQueries: searchQueries.length,
+            query,
+            artist: args.artist,
+            title: args.title,
+          }));
+
+          // Search API call (snippet only, no contentDetails available)
+          const params = new URLSearchParams({
+            part: "snippet", // Search API only supports snippet
+            type: "video",
+            q: query,
+            maxResults: "1",
+            videoCategoryId: "10", // Music category
+            order: "relevance", // Best matches first
+            key: apiKey,
           });
 
-          if (!details || details.isLive) {
-            await logToDatabase(ctx, logger.debug("Skipping candidate (no details or live)", {
-              videoId: candidate.videoId,
-              title: candidate.title,
+          const searchUrl = `https://www.googleapis.com/youtube/v3/search?${params.toString()}`;
+          const response = await fetch(searchUrl);
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            await logToDatabase(ctx, logger.warn("YouTube search query failed", {
+              query,
+              status: response.status,
+              statusText: response.statusText,
+              errorBody: errorText,
             }));
-            continue;
+            continue; // Try next query
+          }
+
+          const data: YouTubeSearchResponse = await response.json();
+
+          if (!data.items || data.items.length === 0) {
+            await logToDatabase(ctx, logger.debug("No results for query, trying next", {
+              query,
+              queryIndex: i + 1,
+            }));
+            continue; // Try next query
+          }
+
+          const video = data.items[0];
+          
+          // Get detailed video info including duration
+          const detailsParams = new URLSearchParams({
+            part: "snippet,contentDetails,statistics",
+            id: video.id.videoId,
+            key: apiKey,
+          });
+
+          const detailsUrl = `https://www.googleapis.com/youtube/v3/videos?${detailsParams.toString()}`;
+          const detailsResponse = await fetch(detailsUrl);
+
+          if (!detailsResponse.ok) {
+            await logToDatabase(ctx, logger.warn("Video details request failed", {
+              videoId: video.id.videoId,
+              status: detailsResponse.status,
+            }));
+            continue; // Try next query
+          }
+
+          const detailsData = await detailsResponse.json();
+          if (!detailsData.items || detailsData.items.length === 0) {
+            continue; // Try next query
+          }
+
+          const videoDetails = detailsData.items[0];
+          const durationSeconds = parseDuration(videoDetails.contentDetails.duration);
+
+          // Validate result
+          if (videoDetails.snippet.liveBroadcastContent !== "none") {
+            await logToDatabase(ctx, logger.debug("Skipping live video", {
+              videoId: video.id.videoId,
+              title: video.snippet.title,
+            }));
+            continue; // Try next query
           }
 
           // Apply duration filters
-          if (args.minDurationSeconds && details.durationSeconds < args.minDurationSeconds) {
-            await logToDatabase(ctx, logger.debug("Skipping candidate (too short)", {
-              videoId: candidate.videoId,
-              durationSeconds: details.durationSeconds,
+          if (args.minDurationSeconds && durationSeconds < args.minDurationSeconds) {
+            await logToDatabase(ctx, logger.debug("Video too short, trying next query", {
+              videoId: video.id.videoId,
+              durationSeconds,
               minRequired: args.minDurationSeconds,
             }));
-            continue;
+            continue; // Try next query
           }
 
-          if (args.maxDurationSeconds && details.durationSeconds > args.maxDurationSeconds) {
-            await logToDatabase(ctx, logger.debug("Skipping candidate (too long)", {
-              videoId: candidate.videoId,
-              durationSeconds: details.durationSeconds,
+          if (args.maxDurationSeconds && durationSeconds > args.maxDurationSeconds) {
+            await logToDatabase(ctx, logger.debug("Video too long, trying next query", {
+              videoId: video.id.videoId,
+              durationSeconds,
               maxAllowed: args.maxDurationSeconds,
             }));
-            continue;
+            continue; // Try next query
           }
 
-          validCandidates.push({
-            ...candidate,
-            details,
-          });
+          // Calculate simple relevance score
+          let score = 100;
+          const titleLower = video.snippet.title.toLowerCase();
+          const channelLower = video.snippet.channelTitle.toLowerCase();
+          const artistLower = args.artist.toLowerCase();
+
+          // Bonus points for quality indicators
+          if (titleLower.includes("official")) score += 20;
+          if (titleLower.includes("topic")) score += 15;
+          if (channelLower.includes(artistLower)) score += 15;
+          if (channelLower.includes("official")) score += 10;
+          if (titleLower.includes(artistLower)) score += 10;
+
+          // Penalty for undesirable content
+          if (titleLower.includes("cover")) score -= 10;
+          if (titleLower.includes("karaoke")) score -= 20;
+          if (titleLower.includes("lyrics")) score -= 5;
+
+          const result = {
+            videoId: video.id.videoId,
+            title: video.snippet.title,
+            channelTitle: video.snippet.channelTitle,
+            thumbnailUrl: video.snippet.thumbnails.medium?.url || video.snippet.thumbnails.default.url,
+            duration: videoDetails.contentDetails.duration,
+            durationSeconds,
+            viewCount: parseInt(videoDetails.statistics.viewCount || "0"),
+            score,
+            publishedAt: video.snippet.publishedAt,
+          };
+
+          await logToDatabase(ctx, logger.info("YouTube match found", {
+            artist: args.artist,
+            title: args.title,
+            queryUsed: query,
+            queryIndex: i + 1,
+            videoId: result.videoId,
+            videoTitle: result.title,
+            channelTitle: result.channelTitle,
+            duration: result.duration,
+            durationSeconds: result.durationSeconds,
+            score: result.score,
+            viewCount: result.viewCount,
+          }));
+
+          return result;
 
         } catch (error) {
-          await logToDatabase(ctx, logger.error("Error checking candidate details", {
-            videoId: candidate.videoId,
+          await logToDatabase(ctx, logger.error("Error in YouTube search query", {
+            query,
+            queryIndex: i + 1,
             error: error instanceof Error ? error.message : String(error),
           }));
+          continue; // Try next query
         }
       }
 
-      if (validCandidates.length === 0) {
-        await logToDatabase(ctx, logger.warn("No valid YouTube candidates after filtering", {
-          artist: args.artist,
-          title: args.title,
-          originalCandidates: searchResults.length,
-        }));
-        return null;
-      }
-
-      // Return the best candidate (already sorted by score)
-      const bestMatch = validCandidates[0];
-
-      await logToDatabase(ctx, logger.info("Best YouTube match found", {
+      // All queries failed
+      await logToDatabase(ctx, logger.warn("No valid YouTube match found after all queries", {
         artist: args.artist,
         title: args.title,
-        selectedVideoId: bestMatch.videoId,
-        selectedTitle: bestMatch.title,
-        channelTitle: bestMatch.channelTitle,
-        duration: bestMatch.details.duration,
-        score: bestMatch.score,
-        viewCount: bestMatch.details.viewCount,
+        queriesAttempted: searchQueries.length,
       }));
 
-      return {
-        videoId: bestMatch.videoId,
-        title: bestMatch.title,
-        channelTitle: bestMatch.channelTitle,
-        thumbnailUrl: bestMatch.thumbnailUrl,
-        duration: bestMatch.details.duration,
-        durationSeconds: bestMatch.details.durationSeconds,
-        viewCount: bestMatch.details.viewCount,
-        score: bestMatch.score,
-        publishedAt: bestMatch.publishedAt,
-      };
+      return null;
     }, {
       artist: args.artist,
       title: args.title,

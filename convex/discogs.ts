@@ -41,6 +41,7 @@ export const searchDiscogs = action({
     yearRange: v.optional(v.array(v.number())),
     styles: v.optional(v.array(v.string())),
     limit: v.optional(v.number()),
+    page: v.optional(v.number()), // For pagination through all results
     randomOffset: v.optional(v.boolean()), // For discovering varied content
   },
   handler: async (ctx, args) => {
@@ -51,63 +52,58 @@ export const searchDiscogs = action({
       }
 
       // Build search query
-      let query = "";
       const params = new URLSearchParams();
 
-      // Add genre filters
+      // Add style filters for OR logic (House OR Electro)
       if (args.genreTags && args.genreTags.length > 0) {
-        // Use the first genre as primary search term
-        query = `genre:"${args.genreTags[0]}"`;
-        
-        // Add additional genres as OR conditions
-        if (args.genreTags.length > 1) {
-          const additionalGenres = args.genreTags.slice(1).map(genre => `genre:"${genre}"`).join(" OR ");
-          query = `(${query} OR ${additionalGenres})`;
+        // Use all provided genre tags as style parameters (OR logic)
+        for (const tag of args.genreTags) {
+          // Capitalize first letter to match Discogs style format
+          const discogStyle = tag.charAt(0).toUpperCase() + tag.slice(1);
+          params.append("style", discogStyle);
         }
+        // Also add Electronic genre as base
+        params.append("genre", "Electronic");
       }
 
-      // Add year range
+      // Add year range using YYYY-YYYY format as specified in guide
       if (args.yearRange && args.yearRange.length >= 2) {
         const minYear = args.yearRange[0];
         const maxYear = args.yearRange[1];
-        if (minYear === maxYear) {
-          params.append("year", minYear.toString());
-        } else {
-          params.append("year", `${minYear}-${maxYear}`);
-        }
+        
+        // Use year range format (e.g., "2000-2009")
+        params.append("year", `${minYear}-${maxYear}`);
       }
 
-      // Set search parameters
+      // Set search parameters per guide specification
       params.append("type", "release");
-      params.append("format", "album,ep,single");
-      params.append("per_page", (args.limit || 50).toString());
-
-      // Add random offset for variety
-      if (args.randomOffset) {
-        const randomPage = Math.floor(Math.random() * 10) + 1; // Random page 1-10
-        params.append("page", randomPage.toString());
+      params.append("format", "Vinyl"); // Quality filter as per guide
+      params.append("per_page", Math.min(args.limit || 100, 100).toString()); // Max 100 per API
+      
+      // Add page parameter for pagination
+      if (args.page && args.page > 0) {
+        params.append("page", args.page.toString());
       }
 
-      if (query) {
-        params.append("q", query);
-      }
+      // Add random offset for variety - will be handled after getting pagination info
+      let useRandomPage = args.randomOffset && !args.page; // Don't randomize if explicit page requested
+
 
       const searchUrl = `https://api.discogs.com/database/search?${params.toString()}`;
 
       await logToDatabase(ctx, logger.info("Starting Discogs API search", {
         searchUrl: searchUrl.replace(token, "***"),
-        query,
         genreTags: args.genreTags,
         yearRange: args.yearRange,
         limit: args.limit,
         randomOffset: args.randomOffset,
       }));
 
-      // Make API request
+      // Make API request with proper User-Agent per guide
       const response = await fetch(searchUrl, {
         headers: {
           "Authorization": `Discogs token=${token}`,
-          "User-Agent": "104.2FM-RadioApp/1.0",
+          "User-Agent": "1042FM/1.0 +https://1042.fm",
         },
       });
 
@@ -137,6 +133,47 @@ export const searchDiscogs = action({
         totalPages: data.pagination.pages,
       }));
 
+      // If we have multiple pages and want randomization, get a random page
+      if (useRandomPage && data.pagination.pages > 1 && data.results.length < (args.limit || 50)) {
+        const randomPageNum = Math.floor(Math.random() * Math.min(data.pagination.pages, 5)) + 1; // Max 5 pages for variety
+        
+        if (randomPageNum !== data.pagination.page) {
+          await logToDatabase(ctx, logger.info("Fetching random page for variety", {
+            randomPage: randomPageNum,
+            totalPages: data.pagination.pages,
+          }));
+          
+          const randomParams = new URLSearchParams(params);
+          randomParams.set("page", randomPageNum.toString());
+          const randomUrl = `https://api.discogs.com/database/search?${randomParams.toString()}`;
+          
+          try {
+            const randomResponse = await fetch(randomUrl, {
+              headers: {
+                "Authorization": `Discogs token=${token}`,
+                "User-Agent": "1042FM/1.0 +https://1042.fm",
+              },
+            });
+            
+            if (randomResponse.ok) {
+              const randomData: DiscogsSearchResponse = await randomResponse.json();
+              // Combine results from both pages for variety
+              data.results = [...data.results, ...randomData.results];
+              
+              await logToDatabase(ctx, logger.info("Random page results added", {
+                originalResults: data.results.length - randomData.results.length,
+                additionalResults: randomData.results.length,
+                totalCombined: data.results.length,
+              }));
+            }
+          } catch (error) {
+            await logToDatabase(ctx, logger.warn("Random page fetch failed, continuing with original results", {
+              error: error instanceof Error ? error.message : String(error),
+            }));
+          }
+        }
+      }
+
       // Filter and process results
       const processedResults: Array<{
         discogsId: string;
@@ -164,18 +201,21 @@ export const searchDiscogs = action({
           const artist = titleParts[0].trim();
           const title = titleParts.slice(1).join(" - ").trim();
 
-          // Skip if we've played this recently
-          const recentCheck = await ctx.runQuery(api.radio.isTrackRecent, {
+          // No need for client-side style filtering since we use style_exact in API call
+
+          // Skip if we've played this in the last 100 tracks
+          const historyCheck = await ctx.runQuery(api.radio.isTrackInRecentHistory, {
             discogsId: result.id.toString(),
-            hoursBack: 24,
+            lastNTracks: 100,
           });
 
-          if (recentCheck.isRecent) {
-            await logToDatabase(ctx, logger.debug("Skipping recently played track", {
+          if (historyCheck.isInRecentHistory) {
+            await logToDatabase(ctx, logger.debug("Skipping track in recent history", {
               discogsId: result.id,
               title,
               artist,
-              lastPlayedAt: recentCheck.lastPlayedAt,
+              lastPlayedAt: historyCheck.lastPlayedAt,
+              historyPosition: historyCheck.historyPosition,
             }));
             continue;
           }
@@ -214,6 +254,8 @@ export const searchDiscogs = action({
         processedCount: processedResults.length,
         filteredOut: data.results.length - processedResults.length,
       }));
+
+      // With precise style_exact matching, fallback search is no longer needed
 
       return {
         results: processedResults,
@@ -254,7 +296,7 @@ export const getDiscogsRelease = action({
       const response = await fetch(releaseUrl, {
         headers: {
           "Authorization": `Discogs token=${token}`,
-          "User-Agent": "104.2FM-RadioApp/1.0",
+          "User-Agent": "1042FM/1.0 +https://1042.fm",
         },
       });
 
@@ -309,23 +351,44 @@ export const smartSearch = action({
     userId: v.optional(v.id("users")),
     count: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    return await withTiming(ctx, logger, "smart-search", async () => {
+  handler: async (ctx, args): Promise<Array<{
+    discogsId: string;
+    title: string;
+    artist: string;
+    year?: number;
+    label?: string;
+    genres: string[];
+    styles: string[];
+    thumb: string;
+  }>> => {
+    return await withTiming(ctx, logger, "smart-search", async (): Promise<Array<{
+      discogsId: string;
+      title: string;
+      artist: string;
+      year?: number;
+      label?: string;
+      genres: string[];
+      styles: string[];
+      thumb: string;
+    }>> => {
       // Get controller preferences
-      const preferences = await ctx.runQuery(api.users.getControllerPreferences);
+      const preferences: any = await ctx.runQuery(api.users.getControllerPreferences);
+
+      // Use a random page (1-10) to get variety from the large result set
+      const randomPage = Math.floor(Math.random() * 10) + 1;
 
       await logToDatabase(ctx, logger.info("Starting smart search", {
         userId: args.userId,
         requestedCount: args.count || 5,
         preferences: preferences,
+        randomPage: randomPage,
       }));
-
-      // Perform Discogs search with some randomization for variety
-      const searchResults = await ctx.runAction(api.discogs.searchDiscogs, {
+      
+      const searchResults: any = await ctx.runAction(api.discogs.searchDiscogs, {
         genreTags: preferences.genreTags,
         yearRange: preferences.yearRange,
-        limit: Math.min((args.count || 5) * 3, 50), // Get more than needed for filtering
-        randomOffset: true,
+        limit: Math.min((args.count || 5) * 2, 50), // Get some extra for variety
+        page: randomPage, // Use pagination for accessing full catalog
       });
 
       if (searchResults.results.length === 0) {
@@ -336,7 +399,16 @@ export const smartSearch = action({
       }
 
       // Shuffle results for variety and take requested count
-      const shuffledResults = searchResults.results
+      const shuffledResults: Array<{
+        discogsId: string;
+        title: string;
+        artist: string;
+        year?: number;
+        label?: string;
+        genres: string[];
+        styles: string[];
+        thumb: string;
+      }> = searchResults.results
         .sort(() => Math.random() - 0.5)
         .slice(0, args.count || 5);
 

@@ -4,6 +4,16 @@ import { Logger, logToDatabase } from "./logger";
 
 const logger = new Logger("user-management");
 
+// Get user by ID
+export const getUserById = query({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.userId);
+  },
+});
+
 // Get or create user on first login (called from Clerk webhook or frontend)
 export const getOrCreateUser = mutation({
   args: {
@@ -36,8 +46,8 @@ export const getOrCreateUser = mutation({
         clerkId: args.clerkId,
         role: args.role || "listener",
         preferences: {
-          genreTags: ["electronic", "experimental"],
-          yearRange: [1990, 2024],
+          genreTags: ["house"],
+          yearRange: [2000, 2010],
           energy: "Medium",
           region: undefined,
         },
@@ -219,8 +229,8 @@ export const getControllerPreferences = query({
       if (!controller || !controller.preferences) {
         // Return default preferences if no controller found
         const defaultPrefs = {
-          genreTags: ["electronic", "experimental"],
-          yearRange: [1990, 2024],
+          genreTags: ["house"],
+          yearRange: [2000, 2010],
           energy: "Medium" as const,
           region: undefined,
         };

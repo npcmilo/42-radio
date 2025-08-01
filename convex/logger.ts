@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
+import { api } from "./_generated/api";
 
 // Log levels for filtering and alerting
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -47,21 +48,23 @@ export const getLogs = query({
     since: v.optional(v.number()), // timestamp
   },
   handler: async (ctx, args) => {
-    let logsQuery = ctx.db.query("logs");
+    let logsQuery;
 
     // Filter by level if specified
     if (args.level) {
-      logsQuery = logsQuery.withIndex("by_level", (q) => q.eq("level", args.level));
+      logsQuery = ctx.db.query("logs").withIndex("by_level", (q) => q.eq("level", args.level!));
     }
-
     // Filter by component if specified
-    if (args.component) {
-      logsQuery = logsQuery.withIndex("by_component", (q) => q.eq("component", args.component));
+    else if (args.component) {
+      logsQuery = ctx.db.query("logs").withIndex("by_component", (q) => q.eq("component", args.component!));
     }
-
     // Filter by timestamp if specified
-    if (args.since) {
-      logsQuery = logsQuery.withIndex("by_timestamp", (q) => q.gte("timestamp", args.since));
+    else if (args.since) {
+      logsQuery = ctx.db.query("logs").withIndex("by_timestamp", (q) => q.gte("timestamp", args.since!));
+    }
+    // Default query without filters
+    else {
+      logsQuery = ctx.db.query("logs");
     }
 
     // Order by most recent first and limit results
@@ -158,10 +161,18 @@ export async function logToDatabase(
   try {
     if (ctx.runMutation) {
       // Called from an action
-      await ctx.runMutation(writeLog, logEntry);
+      await ctx.runMutation(api.logger.writeLog, logEntry);
     } else {
-      // Called from a mutation
-      await writeLog(ctx, logEntry);
+      // Called from a mutation - insert directly
+      await ctx.db.insert("logs", {
+        timestamp: Date.now(),
+        level: logEntry.level,
+        component: logEntry.component,
+        message: logEntry.message,
+        metadata: logEntry.metadata,
+        userId: logEntry.userId,
+        trackId: logEntry.trackId,
+      });
     }
   } catch (error) {
     // Fallback to console if database logging fails
