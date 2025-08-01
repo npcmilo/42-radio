@@ -58,4 +58,19 @@ export default defineSchema({
     type: v.union(v.literal("like"), v.literal("skip")),
     createdAt: v.number(),
   }).index("by_user_and_track", ["userId", "discogsId"]), // To prevent duplicate feedback
+
+  // Application logs for debugging and monitoring
+  logs: defineTable({
+    timestamp: v.number(), // UTC timestamp
+    level: v.union(v.literal("debug"), v.literal("info"), v.literal("warn"), v.literal("error")),
+    component: v.string(), // e.g., "discogs-search", "youtube-search", "queue-manager"
+    message: v.string(), // Human-readable log message
+    metadata: v.optional(v.any()), // Structured data (API responses, errors, timing)
+    userId: v.optional(v.id("users")), // Associate logs with specific users when relevant
+    trackId: v.optional(v.string()), // Associate with specific tracks (discogsId or youtubeId)
+  })
+    .index("by_timestamp", ["timestamp"]) // For time-based queries
+    .index("by_level", ["level"]) // For filtering by log level
+    .index("by_component", ["component"]) // For component-specific logs
+    .index("by_level_and_timestamp", ["level", "timestamp"]), // For efficient error queries
 });
