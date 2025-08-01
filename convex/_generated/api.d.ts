@@ -13,8 +13,11 @@ import type {
   FilterApi,
   FunctionReference,
 } from "convex/server";
+import type * as crons from "../crons.js";
 import type * as discogs from "../discogs.js";
 import type * as logger from "../logger.js";
+import type * as maintenance from "../maintenance.js";
+import type * as queueManager from "../queueManager.js";
 import type * as radio from "../radio.js";
 import type * as users from "../users.js";
 import type * as youtube from "../youtube.js";
@@ -28,8 +31,11 @@ import type * as youtube from "../youtube.js";
  * ```
  */
 declare const fullApi: ApiFromModules<{
+  crons: typeof crons;
   discogs: typeof discogs;
   logger: typeof logger;
+  maintenance: typeof maintenance;
+  queueManager: typeof queueManager;
   radio: typeof radio;
   users: typeof users;
   youtube: typeof youtube;

@@ -38,7 +38,7 @@ interface DiscogsSearchResponse {
 export const searchDiscogs = action({
   args: {
     genreTags: v.optional(v.array(v.string())),
-    yearRange: v.optional(v.tuple([v.number(), v.number()])),
+    yearRange: v.optional(v.array(v.number())),
     styles: v.optional(v.array(v.string())),
     limit: v.optional(v.number()),
     randomOffset: v.optional(v.boolean()), // For discovering varied content
@@ -67,8 +67,9 @@ export const searchDiscogs = action({
       }
 
       // Add year range
-      if (args.yearRange) {
-        const [minYear, maxYear] = args.yearRange;
+      if (args.yearRange && args.yearRange.length >= 2) {
+        const minYear = args.yearRange[0];
+        const maxYear = args.yearRange[1];
         if (minYear === maxYear) {
           params.append("year", minYear.toString());
         } else {

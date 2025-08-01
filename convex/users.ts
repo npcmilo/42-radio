@@ -154,7 +154,7 @@ export const updateUserPreferences = mutation({
     userId: v.id("users"),
     preferences: v.object({
       genreTags: v.array(v.string()),
-      yearRange: v.tuple([v.number(), v.number()]),
+      yearRange: v.array(v.number()),
       energy: v.optional(v.union(v.literal("Low"), v.literal("Medium"), v.literal("High"))),
       region: v.optional(v.string()),
     }),
@@ -220,7 +220,7 @@ export const getControllerPreferences = query({
         // Return default preferences if no controller found
         const defaultPrefs = {
           genreTags: ["electronic", "experimental"],
-          yearRange: [1990, 2024] as [number, number],
+          yearRange: [1990, 2024],
           energy: "Medium" as const,
           region: undefined,
         };

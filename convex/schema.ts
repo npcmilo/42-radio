@@ -44,7 +44,7 @@ export default defineSchema({
     preferences: v.optional(
       v.object({
         genreTags: v.array(v.string()),
-        yearRange: v.tuple([v.number(), v.number()]),
+        yearRange: v.array(v.number()),
         energy: v.optional(v.union(v.literal("Low"), v.literal("Medium"), v.literal("High"))),
         region: v.optional(v.string()),
       })
