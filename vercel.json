@@ -1,5 +1,5 @@
 {
-  "buildCommand": "remix vite:build",
+  "buildCommand": "npm run build",
   "outputDirectory": "build/client",
   "routes": [
     {
