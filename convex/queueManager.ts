@@ -5,11 +5,11 @@ import { api } from "./_generated/api";
 
 const logger = new Logger("queue-manager");
 
-// Configuration constants
-const MIN_QUEUE_SIZE = 5; // Absolute minimum tracks (emergency level)
-const TARGET_QUEUE_SIZE = 8; // Optimal queue size to maintain
-const MAX_QUEUE_SIZE = 20; // Maximum tracks to avoid over-queuing
-const DISCOVERY_BATCH_SIZE = 10; // How many tracks to discover at once
+// Configuration constants - optimized for quota efficiency
+const MIN_QUEUE_SIZE = 15; // Absolute minimum tracks (emergency level)
+const TARGET_QUEUE_SIZE = 40; // Optimal queue size to maintain (~3 hours of music)
+const MAX_QUEUE_SIZE = 80; // Maximum tracks to avoid over-queuing
+const DISCOVERY_BATCH_SIZE = 50; // How many tracks to discover at once (quota-efficient batches)
 
 // Discover and add new tracks to the queue
 export const discoverAndQueueTracks = action({

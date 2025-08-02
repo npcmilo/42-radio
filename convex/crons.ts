@@ -4,19 +4,19 @@ import { api } from "./_generated/api";
 // Define scheduled functions for radio automation
 const crons = cronJobs();
 
-// Maintain queue every 5 minutes
-// Ensures we always have enough tracks queued up
+// Maintain queue every 30 minutes (reduced frequency for quota efficiency)
+// With larger queue size, less frequent maintenance needed
 crons.interval(
   "maintain-queue",
-  { minutes: 5 },
+  { minutes: 30 },
   api.queueManager.maintainQueue
 );
 
-// Post-advance queue update every minute
-// Ensures queue is immediately replenished after track changes
+// Post-advance queue update every 10 minutes (reduced frequency)
+// Larger queue means less urgent need for immediate replenishment
 crons.interval(
   "post-advance-queue-update",
-  { minutes: 1 },
+  { minutes: 10 },
   api.radio.postAdvanceQueueUpdate
 );
 
@@ -46,12 +46,12 @@ crons.cron(
 );
 
 // Daily discovery refresh at 6 AM
-// Ensures we have a good variety of fresh tracks
+// Large batch to fill queue for the entire day
 crons.cron(
   "daily-track-discovery",
   "0 6 * * *", // Daily at 6 AM
   api.queueManager.discoverAndQueueTracks,
-  { count: 20, forceRefresh: true }
+  { count: 80, forceRefresh: true }
 );
 
 export default crons;
