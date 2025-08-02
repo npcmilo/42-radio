@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "buildCommand": "remix vite:build",
+  "outputDirectory": "build/client",
+  "serverless": true,
+  "functions": {
+    "build/server/index.js": {
+      "runtime": "nodejs18.x"
+    }
+  },
+  "routes": [
+    {
+      "src": "/build/(.*)",
+      "dest": "/build/$1"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/build/server/index.js"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
+}

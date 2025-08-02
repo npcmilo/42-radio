@@ -76,4 +76,37 @@ export default defineSchema({
     .index("by_level", ["level"]) // For filtering by log level
     .index("by_component", ["component"]) // For component-specific logs
     .index("by_level_and_timestamp", ["level", "timestamp"]), // For efficient error queries
+
+  // YouTube search cache to avoid redundant API calls
+  youtubeCache: defineTable({
+    artist: v.string(),
+    title: v.string(),
+    youtubeId: v.string(),
+    videoTitle: v.string(),
+    channelTitle: v.string(),
+    thumbnailUrl: v.string(),
+    durationSeconds: v.number(),
+    viewCount: v.number(),
+    publishedAt: v.string(),
+    cachedAt: v.number(), // UTC timestamp when cached
+    lastUsedAt: v.number(), // UTC timestamp when last used
+    useCount: v.number(), // Number of times this cache entry was used
+  })
+    .index("by_artist_title", ["artist", "title"]) // For quick lookups
+    .index("by_cached_at", ["cachedAt"]), // For cache cleanup
+
+  // YouTube API key usage tracking for rotation
+  youtubeApiUsage: defineTable({
+    keyId: v.string(), // "key1", "key2", etc.
+    date: v.string(), // Date in YYYY-MM-DD format (Pacific Time)
+    quotaUsed: v.number(), // Units consumed today
+    callsSuccessful: v.number(), // Successful API calls
+    callsFailed: v.number(), // Failed API calls
+    quotaExhausted: v.boolean(), // Whether this key hit quota limit today
+    lastQuotaReset: v.number(), // Timestamp of last quota reset (midnight PT)
+    createdAt: v.number(), // UTC timestamp
+    lastUpdatedAt: v.number(), // UTC timestamp
+  })
+    .index("by_key_and_date", ["keyId", "date"]) // For daily usage lookup
+    .index("by_date", ["date"]), // For cleanup and analytics
 });

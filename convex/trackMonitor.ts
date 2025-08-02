@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, mutation, query } from "./_generated/server";
+import { action, query } from "./_generated/server";
 import { Logger, logToDatabase, withTiming } from "./logger";
 import { api } from "./_generated/api";
 

@@ -82,10 +82,11 @@ export const searchYouTube = action({
   },
   handler: async (ctx, args) => {
     return await withTiming(ctx, logger, "youtube-search", async () => {
-      const apiKey = process.env.YOUTUBE_API_KEY;
-      if (!apiKey) {
-        throw new Error("YOUTUBE_API_KEY not configured");
-      }
+      // Get best available API key from rotation pool
+      const keyInfo = await ctx.runAction(api.youtubeApiKeyPool.getBestAvailableKey, {
+        operation: "search",
+      });
+      const apiKey = keyInfo.apiKey;
 
       // Simple single search query: just "artist title"
       const query = `${args.artist} ${args.title}`;
@@ -116,16 +117,33 @@ export const searchYouTube = action({
 
       if (!response.ok) {
         const errorText = await response.text();
+        
+        // Track quota usage for failed call
+        await ctx.runMutation(api.youtubeApiKeyPool.updateKeyUsage, {
+          keyId: keyInfo.keyId,
+          quotaCost: 100, // Search API cost
+          success: false,
+          errorCode: response.status,
+        });
+        
         await logToDatabase(ctx, logger.warn("YouTube search failed", {
           query,
           status: response.status,
           statusText: response.statusText,
           errorBody: errorText,
+          keyId: keyInfo.keyId,
         }));
         return [];
       }
 
       const data: YouTubeSearchResponse = await response.json();
+      
+      // Track successful search API call
+      await ctx.runMutation(api.youtubeApiKeyPool.updateKeyUsage, {
+        keyId: keyInfo.keyId,
+        quotaCost: 100, // Search API cost
+        success: true,
+      });
       
       if (!data.items || data.items.length === 0) {
         await logToDatabase(ctx, logger.warn("No YouTube results found", {
@@ -166,6 +184,94 @@ export const searchYouTube = action({
   },
 });
 
+// Get detailed information about multiple YouTube videos in a single API call
+export const getBatchVideoDetails = action({
+  args: {
+    videoIds: v.array(v.string()),
+  },
+  handler: async (ctx, args): Promise<any[]> => {
+    return await withTiming(ctx, logger, "youtube-batch-video-details", async (): Promise<any[]> => {
+      // Get best available API key from rotation pool
+      const keyInfo: any = await ctx.runAction(api.youtubeApiKeyPool.getBestAvailableKey, {
+        operation: "batch_video_details",
+      });
+      const apiKey: string = keyInfo.apiKey;
+
+      if (args.videoIds.length === 0) {
+        return [];
+      }
+
+      // YouTube API allows up to 50 video IDs per request
+      const chunks = [];
+      for (let i = 0; i < args.videoIds.length; i += 50) {
+        chunks.push(args.videoIds.slice(i, i + 50));
+      }
+
+      const allResults = [];
+
+      for (const chunk of chunks) {
+        const params: URLSearchParams = new URLSearchParams({
+          part: "snippet,contentDetails,statistics",
+          id: chunk.join(","),
+          key: apiKey,
+        });
+
+        const detailsUrl: string = `https://www.googleapis.com/youtube/v3/videos?${params.toString()}`;
+
+        await logToDatabase(ctx, logger.debug("Fetching batch YouTube video details", {
+          videoCount: chunk.length,
+          firstVideoId: chunk[0],
+        }));
+
+        const response: Response = await fetch(detailsUrl);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          await logToDatabase(ctx, logger.error("YouTube batch video details request failed", {
+            videoCount: chunk.length,
+            status: response.status,
+            statusText: response.statusText,
+            errorBody: errorText,
+          }));
+          continue; // Skip this chunk but continue with others
+        }
+
+        const data: any = await response.json();
+
+        if (data.items) {
+          for (const video of data.items) {
+            const durationSeconds = parseDuration(video.contentDetails.duration);
+            allResults.push({
+              id: video.id,
+              title: video.snippet.title,
+              description: video.snippet.description,
+              channelTitle: video.snippet.channelTitle,
+              publishedAt: video.snippet.publishedAt,
+              duration: video.contentDetails.duration,
+              durationSeconds,
+              definition: video.contentDetails.definition,
+              caption: video.contentDetails.caption,
+              viewCount: parseInt(video.statistics.viewCount),
+              likeCount: video.statistics.likeCount ? parseInt(video.statistics.likeCount) : undefined,
+              isLive: video.snippet.liveBroadcastContent !== "none" && video.snippet.liveBroadcastContent !== undefined,
+            });
+          }
+        }
+      }
+
+      await logToDatabase(ctx, logger.info("Batch YouTube video details retrieved", {
+        requestedCount: args.videoIds.length,
+        retrievedCount: allResults.length,
+        chunksProcessed: chunks.length,
+      }));
+
+      return allResults;
+    }, {
+      videoIdCount: args.videoIds.length,
+    });
+  },
+});
+
 // Get detailed information about a YouTube video
 export const getVideoDetails = action({
   args: {
@@ -173,10 +279,11 @@ export const getVideoDetails = action({
   },
   handler: async (ctx, args) => {
     return await withTiming(ctx, logger, "youtube-video-details", async () => {
-      const apiKey = process.env.YOUTUBE_API_KEY;
-      if (!apiKey) {
-        throw new Error("YOUTUBE_API_KEY not configured");
-      }
+      // Get best available API key from rotation pool
+      const keyInfo = await ctx.runAction(api.youtubeApiKeyPool.getBestAvailableKey, {
+        operation: "video_details",
+      });
+      const apiKey = keyInfo.apiKey;
 
       const params = new URLSearchParams({
         part: "snippet,contentDetails,statistics",
@@ -283,10 +390,50 @@ export const findBestMatch = action({
       score: number;
       publishedAt: string;
     } | null> => {
-      const apiKey = process.env.YOUTUBE_API_KEY;
-      if (!apiKey) {
-        throw new Error("YOUTUBE_API_KEY not configured");
+      // Check cache first
+      const cached = await ctx.runQuery(api.youtubeCache.getCachedMatch, {
+        artist: args.artist,
+        title: args.title,
+      });
+
+      if (cached) {
+        // Update cache usage statistics
+        if (cached.cacheId) {
+          try {
+            await ctx.runMutation(api.youtubeCache.updateCacheUsage, {
+              cacheId: cached.cacheId,
+            });
+          } catch (error) {
+            // Silently fail - cache usage tracking is not critical
+          }
+        }
+
+        await logToDatabase(ctx, logger.info("YouTube match found in cache", {
+          artist: args.artist,
+          title: args.title,
+          youtubeId: cached.videoId,
+          cacheHit: true,
+        }));
+
+        // Return cached result with required fields
+        return {
+          videoId: cached.videoId,
+          title: cached.title,
+          channelTitle: cached.channelTitle,
+          thumbnailUrl: cached.thumbnailUrl,
+          duration: "", // Not stored in cache, but not critical
+          durationSeconds: cached.durationSeconds,
+          viewCount: cached.viewCount,
+          score: 100, // Default score for cached results
+          publishedAt: cached.publishedAt,
+        };
       }
+
+      // Get best available API key from rotation pool
+      const keyInfo = await ctx.runAction(api.youtubeApiKeyPool.getBestAvailableKey, {
+        operation: "search",
+      });
+      const apiKey = keyInfo.apiKey;
 
       await logToDatabase(ctx, logger.info("Finding YouTube match with progressive search", {
         artist: args.artist,
@@ -294,6 +441,8 @@ export const findBestMatch = action({
         year: args.year,
         minDurationSeconds: args.minDurationSeconds,
         maxDurationSeconds: args.maxDurationSeconds,
+        keyId: keyInfo.keyId,
+        quotaRemaining: keyInfo.quotaRemaining,
       }));
 
       // Progressive search queries from most specific to broad
@@ -331,16 +480,38 @@ export const findBestMatch = action({
 
           if (!response.ok) {
             const errorText = await response.text();
+            
+            // Track quota usage for failed call
+            await ctx.runMutation(api.youtubeApiKeyPool.updateKeyUsage, {
+              keyId: keyInfo.keyId,
+              quotaCost: 100, // Search API cost
+              success: false,
+              errorCode: response.status,
+            });
+            
             await logToDatabase(ctx, logger.warn("YouTube search query failed", {
               query,
               status: response.status,
               statusText: response.statusText,
               errorBody: errorText,
+              keyId: keyInfo.keyId,
             }));
+            
+            // If quota exhausted, try different key for next search
+            if (response.status === 403) {
+              break; // Exit search loop to get new key
+            }
             continue; // Try next query
           }
 
           const data: YouTubeSearchResponse = await response.json();
+          
+          // Track successful search API call
+          await ctx.runMutation(api.youtubeApiKeyPool.updateKeyUsage, {
+            keyId: keyInfo.keyId,
+            quotaCost: 100, // Search API cost
+            success: true,
+          });
 
           if (!data.items || data.items.length === 0) {
             await logToDatabase(ctx, logger.debug("No results for query, trying next", {
@@ -363,14 +534,31 @@ export const findBestMatch = action({
           const detailsResponse = await fetch(detailsUrl);
 
           if (!detailsResponse.ok) {
+            // Track quota usage for failed video details call
+            await ctx.runMutation(api.youtubeApiKeyPool.updateKeyUsage, {
+              keyId: keyInfo.keyId,
+              quotaCost: 1, // Video details API cost
+              success: false,
+              errorCode: detailsResponse.status,
+            });
+            
             await logToDatabase(ctx, logger.warn("Video details request failed", {
               videoId: video.id.videoId,
               status: detailsResponse.status,
+              keyId: keyInfo.keyId,
             }));
             continue; // Try next query
           }
 
           const detailsData = await detailsResponse.json();
+          
+          // Track successful video details API call
+          await ctx.runMutation(api.youtubeApiKeyPool.updateKeyUsage, {
+            keyId: keyInfo.keyId,
+            quotaCost: 1, // Video details API cost
+            success: true,
+          });
+          
           if (!detailsData.items || detailsData.items.length === 0) {
             continue; // Try next query
           }
@@ -449,6 +637,33 @@ export const findBestMatch = action({
             score: result.score,
             viewCount: result.viewCount,
           }));
+
+          // Save to cache for future use
+          try {
+            await ctx.runMutation(api.youtubeCache.saveToCache, {
+              artist: args.artist,
+              title: args.title,
+              youtubeId: result.videoId,
+              videoTitle: result.title,
+              channelTitle: result.channelTitle,
+              thumbnailUrl: result.thumbnailUrl,
+              durationSeconds: result.durationSeconds,
+              viewCount: result.viewCount,
+              publishedAt: result.publishedAt,
+            });
+            
+            await logToDatabase(ctx, logger.debug("YouTube match saved to cache", {
+              artist: args.artist,
+              title: args.title,
+              youtubeId: result.videoId,
+            }));
+          } catch (cacheError) {
+            await logToDatabase(ctx, logger.warn("Failed to save to cache", {
+              artist: args.artist,
+              title: args.title,
+              error: cacheError instanceof Error ? cacheError.message : String(cacheError),
+            }));
+          }
 
           return result;
 

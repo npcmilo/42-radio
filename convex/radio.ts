@@ -678,9 +678,9 @@ export const postAdvanceQueueUpdate = action({
         lastUpdated: number;
       } = await ctx.runQuery(api.radio.getQueueStatus);
       
-      // Target queue size: maintain 8-10 tracks for optimal buffer
-      const TARGET_QUEUE_SIZE: number = 8;
-      const MAX_QUEUE_SIZE: number = 20;
+      // Target queue size: maintain 40+ tracks for optimal buffer
+      const TARGET_QUEUE_SIZE: number = 40;
+      const MAX_QUEUE_SIZE: number = 500;
       
       await logToDatabase(ctx, logger.debug("Queue status check", {
         currentQueueSize: queueStatus.queueLength,

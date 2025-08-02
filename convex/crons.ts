@@ -4,27 +4,25 @@ import { api } from "./_generated/api";
 // Define scheduled functions for radio automation
 const crons = cronJobs();
 
-// Maintain queue every 30 minutes (reduced frequency for quota efficiency)
-// With larger queue size, less frequent maintenance needed
+// Maintain queue every 2 hours (with 500 track capacity, less frequent checks needed)
 crons.interval(
   "maintain-queue",
-  { minutes: 30 },
+  { hours: 2 },
   api.queueManager.maintainQueue
 );
 
-// Post-advance queue update every 10 minutes (reduced frequency)
-// Larger queue means less urgent need for immediate replenishment
+// Post-advance queue update every 30 minutes (reduced frequency)
+// With larger queue, replenishment is less urgent
 crons.interval(
   "post-advance-queue-update",
-  { minutes: 10 },
+  { minutes: 30 },
   api.radio.postAdvanceQueueUpdate
 );
 
-// Health check every minute
-// Quick check to ensure system is running properly
+// Health check every 5 minutes (reduced frequency)
 crons.interval(
   "queue-health-check", 
-  { minutes: 1 },
+  { minutes: 5 },
   api.queueManager.getQueueHealth
 );
 
@@ -37,7 +35,6 @@ crons.interval(
 );
 
 // Clean up old logs every day at 3 AM
-// Keeps the logs table from growing too large
 crons.cron(
   "cleanup-old-logs",
   "0 3 * * *", // Daily at 3 AM
@@ -45,13 +42,58 @@ crons.cron(
   {}
 );
 
-// Daily discovery refresh at 6 AM
-// Large batch to fill queue for the entire day
+// Major queue replenishment 4 times a day
+// Large batches to minimize API calls
 crons.cron(
-  "daily-track-discovery",
-  "0 6 * * *", // Daily at 6 AM
+  "morning-track-discovery",
+  "0 6 * * *", // 6 AM
   api.queueManager.discoverAndQueueTracks,
-  { count: 80, forceRefresh: true }
+  { count: 200, forceRefresh: true }
+);
+
+crons.cron(
+  "noon-track-discovery",
+  "0 12 * * *", // 12 PM
+  api.queueManager.discoverAndQueueTracks,
+  { count: 150 }
+);
+
+crons.cron(
+  "evening-track-discovery",
+  "0 18 * * *", // 6 PM
+  api.queueManager.discoverAndQueueTracks,
+  { count: 150 }
+);
+
+crons.cron(
+  "night-track-discovery",
+  "0 0 * * *", // Midnight
+  api.queueManager.discoverAndQueueTracks,
+  { count: 200 }
+);
+
+// Clean up old YouTube cache weekly
+crons.cron(
+  "cleanup-youtube-cache",
+  "0 4 * * 0", // Weekly at 4 AM on Sunday
+  api.youtubeCache.cleanupOldCache,
+  { daysToKeep: 90 }
+);
+
+// Reset YouTube API key quotas daily at midnight Pacific Time
+crons.cron(
+  "reset-youtube-api-quotas",
+  "0 0 * * *", // Daily at midnight PT
+  api.youtubeApiKeyPool.resetDailyQuota,
+  {}
+);
+
+// Clean up old API usage records monthly
+crons.cron(
+  "cleanup-api-usage-records",
+  "0 2 1 * *", // Monthly at 2 AM on the 1st
+  api.youtubeApiKeyPool.cleanupOldUsageRecords,
+  { daysToKeep: 30 }
 );
 
 export default crons;

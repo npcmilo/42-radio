@@ -1,15 +1,15 @@
 import { v } from "convex/values";
-import { action, mutation } from "./_generated/server";
+import { action } from "./_generated/server";
 import { Logger, logToDatabase, withTiming } from "./logger";
 import { api } from "./_generated/api";
 
 const logger = new Logger("queue-manager");
 
-// Configuration constants - optimized for quota efficiency
+// Configuration constants - optimized for maximum queue capacity
 const MIN_QUEUE_SIZE = 15; // Absolute minimum tracks (emergency level)
 const TARGET_QUEUE_SIZE = 40; // Optimal queue size to maintain (~3 hours of music)
-const MAX_QUEUE_SIZE = 80; // Maximum tracks to avoid over-queuing
-const DISCOVERY_BATCH_SIZE = 50; // How many tracks to discover at once (quota-efficient batches)
+const MAX_QUEUE_SIZE = 500; // Maximum tracks allowed (40+ hours of music)
+const DISCOVERY_BATCH_SIZE = 150; // Large batches to minimize API calls
 
 // Discover and add new tracks to the queue
 export const discoverAndQueueTracks = action({

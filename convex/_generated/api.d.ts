@@ -21,10 +21,13 @@ import type * as maintenance from "../maintenance.js";
 import type * as queueManager from "../queueManager.js";
 import type * as radio from "../radio.js";
 import type * as scriptGenerator from "../scriptGenerator.js";
+import type * as testApiRotation from "../testApiRotation.js";
 import type * as testTransition from "../testTransition.js";
 import type * as trackMonitor from "../trackMonitor.js";
 import type * as users from "../users.js";
 import type * as youtube from "../youtube.js";
+import type * as youtubeApiKeyPool from "../youtubeApiKeyPool.js";
+import type * as youtubeCache from "../youtubeCache.js";
 
 /**
  * A utility for referencing Convex functions in your app's API.
@@ -43,10 +46,13 @@ declare const fullApi: ApiFromModules<{
   queueManager: typeof queueManager;
   radio: typeof radio;
   scriptGenerator: typeof scriptGenerator;
+  testApiRotation: typeof testApiRotation;
   testTransition: typeof testTransition;
   trackMonitor: typeof trackMonitor;
   users: typeof users;
   youtube: typeof youtube;
+  youtubeApiKeyPool: typeof youtubeApiKeyPool;
+  youtubeCache: typeof youtubeCache;
 }>;
 export declare const api: FilterApi<
   typeof fullApi,
