@@ -3,7 +3,7 @@
   "outputDirectory": "build/client",
   "functions": {
     "build/server/index.js": {
-      "runtime": "nodejs18.x"
+      "runtime": "nodejs20.x"
     }
   },
   "routes": [
