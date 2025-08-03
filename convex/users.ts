@@ -263,7 +263,140 @@ export const getControllerPreferences = query({
   },
 });
 
-// Record user feedback on tracks
+// Toggle like status for a track (enhanced version)
+export const toggleLike = mutation({
+  args: {
+    userId: v.id("users"),
+    trackInfo: v.object({
+      discogsId: v.string(),
+      title: v.string(),
+      artist: v.string(),
+      youtubeId: v.string(),
+      year: v.optional(v.number()),
+      label: v.optional(v.string()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const startTime = Date.now();
+    
+    try {
+      // Get user to check role
+      const user = await ctx.db.get(args.userId);
+      if (!user) {
+        throw new Error("User not found");
+      }
+
+      // Check existing feedback
+      const existingFeedback = await ctx.db
+        .query("feedback")
+        .withIndex("by_user_and_track", (q) => 
+          q.eq("userId", args.userId).eq("discogsId", args.trackInfo.discogsId)
+        )
+        .first();
+
+      const wasLiked = existingFeedback?.type === "like";
+      const isNowLiked = !wasLiked;
+
+      // Update or create feedback
+      if (existingFeedback) {
+        if (wasLiked) {
+          // Unlike: remove the feedback entry
+          await ctx.db.delete(existingFeedback._id);
+        } else {
+          // Change from skip to like
+          await ctx.db.patch(existingFeedback._id, {
+            type: "like",
+            createdAt: Date.now(),
+          });
+        }
+      } else {
+        // Create new like feedback
+        await ctx.db.insert("feedback", {
+          userId: args.userId,
+          discogsId: args.trackInfo.discogsId,
+          type: "like",
+          createdAt: Date.now(),
+        });
+      }
+
+      // Handle saved tracks for controllers
+      if (user.role === "controller") {
+        const existingSaved = await ctx.db
+          .query("savedTracks")
+          .withIndex("by_user_and_track", (q) =>
+            q.eq("userId", args.userId).eq("discogsId", args.trackInfo.discogsId)
+          )
+          .first();
+
+        if (isNowLiked && !existingSaved) {
+          // Add to saved tracks
+          await ctx.db.insert("savedTracks", {
+            userId: args.userId,
+            discogsId: args.trackInfo.discogsId,
+            title: args.trackInfo.title,
+            artist: args.trackInfo.artist,
+            youtubeId: args.trackInfo.youtubeId,
+            year: args.trackInfo.year,
+            label: args.trackInfo.label,
+            savedAt: Date.now(),
+          });
+        } else if (!isNowLiked && existingSaved) {
+          // Remove from saved tracks
+          await ctx.db.delete(existingSaved._id);
+        }
+      }
+
+      // Update history table's likedBy array
+      const historyEntries = await ctx.db
+        .query("history")
+        .withIndex("by_discogsId", (q) => q.eq("discogsId", args.trackInfo.discogsId))
+        .collect();
+
+      for (const entry of historyEntries) {
+        const likedBy = entry.likedBy || [];
+        const userIndex = likedBy.indexOf(args.userId);
+        
+        if (isNowLiked && userIndex === -1) {
+          // Add user to likedBy
+          likedBy.push(args.userId);
+          await ctx.db.patch(entry._id, { likedBy });
+        } else if (!isNowLiked && userIndex !== -1) {
+          // Remove user from likedBy
+          likedBy.splice(userIndex, 1);
+          await ctx.db.patch(entry._id, { likedBy });
+        }
+      }
+
+      const duration = Date.now() - startTime;
+      await logToDatabase(ctx, logger.info("Track like toggled", {
+        duration_ms: duration,
+        userId: args.userId,
+        discogsId: args.trackInfo.discogsId,
+        wasLiked,
+        isNowLiked,
+        isController: user.role === "controller",
+        savedToLibrary: user.role === "controller" && isNowLiked,
+      }));
+
+      return { 
+        success: true, 
+        isLiked: isNowLiked,
+        savedToLibrary: user.role === "controller" && isNowLiked,
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      await logToDatabase(ctx, logger.error("toggleLike mutation failed", {
+        duration_ms: duration,
+        userId: args.userId,
+        discogsId: args.trackInfo.discogsId,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      throw error;
+    }
+  },
+});
+
+// Record user feedback on tracks (kept for backwards compatibility)
 export const recordFeedback = mutation({
   args: {
     userId: v.id("users"),
@@ -331,6 +464,239 @@ export const recordFeedback = mutation({
   },
 });
 
+// Check if a track is liked by a user
+export const isTrackLiked = query({
+  args: {
+    userId: v.id("users"),
+    discogsId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const feedback = await ctx.db
+      .query("feedback")
+      .withIndex("by_user_and_track", (q) =>
+        q.eq("userId", args.userId).eq("discogsId", args.discogsId)
+      )
+      .first();
+    
+    return feedback?.type === "like";
+  },
+});
+
+// Get user's saved tracks
+export const getUserSavedTracks = query({
+  args: {
+    userId: v.id("users"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const startTime = Date.now();
+    
+    try {
+      const user = await ctx.db.get(args.userId);
+      if (!user) {
+        throw new Error("User not found");
+      }
+
+      // Only controllers have saved tracks
+      if (user.role !== "controller") {
+        return [];
+      }
+
+      const savedTracks = await ctx.db
+        .query("savedTracks")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .order("desc")
+        .take(args.limit || 100);
+
+      const duration = Date.now() - startTime;
+      await logToDatabase(ctx, logger.debug("Retrieved saved tracks", {
+        duration_ms: duration,
+        userId: args.userId,
+        count: savedTracks.length,
+      }));
+
+      return savedTracks;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      await logToDatabase(ctx, logger.error("getUserSavedTracks query failed", {
+        duration_ms: duration,
+        userId: args.userId,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      throw error;
+    }
+  },
+});
+
+// Get like count for a track
+export const getTrackLikeCount = query({
+  args: {
+    discogsId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Get from feedback table
+    const likes = await ctx.db
+      .query("feedback")
+      .filter((q) => 
+        q.and(
+          q.eq(q.field("discogsId"), args.discogsId),
+          q.eq(q.field("type"), "like")
+        )
+      )
+      .collect();
+    
+    return likes.length;
+  },
+});
+
+// Toggle thumbs rating for a track (separate from like/save system)
+export const toggleThumbsRating = mutation({
+  args: {
+    userId: v.id("users"),
+    trackInfo: v.object({
+      discogsId: v.string(),
+      title: v.string(),
+      artist: v.string(),
+      youtubeId: v.string(),
+      year: v.optional(v.number()),
+      label: v.optional(v.string()),
+    }),
+    rating: v.union(v.literal("up"), v.literal("down")),
+  },
+  handler: async (ctx, args) => {
+    const startTime = Date.now();
+    
+    try {
+      // Get user to verify they exist
+      const user = await ctx.db.get(args.userId);
+      if (!user) {
+        throw new Error("User not found");
+      }
+
+      const ratingType = args.rating === "up" ? "thumbs_up" : "thumbs_down";
+      const oppositeType = args.rating === "up" ? "thumbs_down" : "thumbs_up";
+
+      // Check existing thumbs rating (only for thumbs up/down, not like/skip)
+      const existingThumbsRating = await ctx.db
+        .query("feedback")
+        .withIndex("by_user_and_track", (q) => 
+          q.eq("userId", args.userId).eq("discogsId", args.trackInfo.discogsId)
+        )
+        .filter((q) => 
+          q.or(
+            q.eq(q.field("type"), "thumbs_up"),
+            q.eq(q.field("type"), "thumbs_down")
+          )
+        )
+        .first();
+
+      const hadSameRating = existingThumbsRating?.type === ratingType;
+      const hadOppositeRating = existingThumbsRating?.type === oppositeType;
+
+      if (existingThumbsRating) {
+        if (hadSameRating) {
+          // Remove the existing rating (toggle off)
+          await ctx.db.delete(existingThumbsRating._id);
+        } else {
+          // Switch to the new rating
+          await ctx.db.patch(existingThumbsRating._id, {
+            type: ratingType,
+            createdAt: Date.now(),
+          });
+        }
+      } else {
+        // Create new thumbs rating
+        await ctx.db.insert("feedback", {
+          userId: args.userId,
+          discogsId: args.trackInfo.discogsId,
+          type: ratingType,
+          createdAt: Date.now(),
+        });
+      }
+
+      const duration = Date.now() - startTime;
+      await logToDatabase(ctx, logger.info("Thumbs rating toggled", {
+        duration_ms: duration,
+        userId: args.userId,
+        discogsId: args.trackInfo.discogsId,
+        rating: args.rating,
+        hadSameRating,
+        hadOppositeRating,
+        newState: hadSameRating ? "none" : ratingType,
+      }));
+
+      return { 
+        success: true, 
+        rating: hadSameRating ? null : args.rating,
+        previousRating: existingThumbsRating?.type || null,
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      await logToDatabase(ctx, logger.error("toggleThumbsRating mutation failed", {
+        duration_ms: duration,
+        userId: args.userId,
+        discogsId: args.trackInfo.discogsId,
+        rating: args.rating,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      throw error;
+    }
+  },
+});
+
+// Get aggregate thumbs up/down counts for a track
+export const getTrackRating = query({
+  args: {
+    discogsId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Get all thumbs ratings for this track
+    const thumbsRatings = await ctx.db
+      .query("feedback")
+      .filter((q) => 
+        q.and(
+          q.eq(q.field("discogsId"), args.discogsId),
+          q.or(
+            q.eq(q.field("type"), "thumbs_up"),
+            q.eq(q.field("type"), "thumbs_down")
+          )
+        )
+      )
+      .collect();
+    
+    const thumbsUp = thumbsRatings.filter(r => r.type === "thumbs_up").length;
+    const thumbsDown = thumbsRatings.filter(r => r.type === "thumbs_down").length;
+    
+    return { thumbsUp, thumbsDown, total: thumbsUp + thumbsDown };
+  },
+});
+
+// Get user's current thumbs rating for a track
+export const getUserTrackRating = query({
+  args: {
+    userId: v.id("users"),
+    discogsId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const thumbsRating = await ctx.db
+      .query("feedback")
+      .withIndex("by_user_and_track", (q) =>
+        q.eq("userId", args.userId).eq("discogsId", args.discogsId)
+      )
+      .filter((q) => 
+        q.or(
+          q.eq(q.field("type"), "thumbs_up"),
+          q.eq(q.field("type"), "thumbs_down")
+        )
+      )
+      .first();
+    
+    if (thumbsRating?.type === "thumbs_up") return "up";
+    if (thumbsRating?.type === "thumbs_down") return "down";
+    return null;
+  },
+});
+
 // Get user statistics
 export const getUserStats = query({
   args: {
@@ -353,12 +719,16 @@ export const getUserStats = query({
 
       const likes = feedback.filter(f => f.type === "like").length;
       const skips = feedback.filter(f => f.type === "skip").length;
+      const thumbsUp = feedback.filter(f => f.type === "thumbs_up").length;
+      const thumbsDown = feedback.filter(f => f.type === "thumbs_down").length;
 
       const stats = {
         role: user.role,
         totalFeedback: feedback.length,
         likes,
         skips,
+        thumbsUp,
+        thumbsDown,
         joinedAt: user._creationTime,
         hasPreferences: !!user.preferences,
       };

@@ -24,6 +24,8 @@ export default defineSchema({
     durationSeconds: v.optional(v.number()), // Duration of the YouTube video in seconds
     playedAt: v.number(), // UTC timestamp
     likedBy: v.optional(v.array(v.id("users"))), // Track who liked it
+    replayCount: v.optional(v.number()), // Number of times replayed from history
+    lastReplayedAt: v.optional(v.number()), // Last time this was replayed as fallback
   }).index("by_discogsId", ["discogsId"]), // Index for fast deduplication checks
 
   // Upcoming tracks to be played
@@ -58,9 +60,30 @@ export default defineSchema({
   feedback: defineTable({
     userId: v.id("users"),
     discogsId: v.string(), // Use Discogs ID to reference the track
-    type: v.union(v.literal("like"), v.literal("skip")),
+    type: v.union(v.literal("like"), v.literal("skip"), v.literal("thumbs_up"), v.literal("thumbs_down")),
     createdAt: v.number(),
   }).index("by_user_and_track", ["userId", "discogsId"]), // To prevent duplicate feedback
+
+  // Saved tracks for controllers to research purchasing
+  savedTracks: defineTable({
+    userId: v.id("users"),
+    discogsId: v.string(),
+    title: v.string(),
+    artist: v.string(),
+    youtubeId: v.string(),
+    year: v.optional(v.number()),
+    label: v.optional(v.string()),
+    savedAt: v.number(), // UTC timestamp
+    // Purchase links (to be populated in future)
+    bandcampUrl: v.optional(v.string()),
+    beatportUrl: v.optional(v.string()),
+    spotifyUrl: v.optional(v.string()),
+    appleMusicUrl: v.optional(v.string()),
+    discogsMarketplaceUrl: v.optional(v.string()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_and_track", ["userId", "discogsId"]) // For checking if track is saved
+    .index("by_saved_at", ["savedAt"]), // For sorting by save date
 
   // Application logs for debugging and monitoring
   logs: defineTable({

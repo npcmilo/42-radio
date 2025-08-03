@@ -33,8 +33,32 @@ export default function RadioPlayer({ isDarkMode }: RadioPlayerProps) {
     user ? { clerkId: user.id } : "skip"
   );
   
+  // Like status for current track
+  const isLiked = useQuery(api.users.isTrackLiked,
+    userData && currentTrack 
+      ? { userId: userData._id, discogsId: currentTrack.discogsId }
+      : "skip"
+  );
+  
+  const likeCount = useQuery(api.users.getTrackLikeCount,
+    currentTrack ? { discogsId: currentTrack.discogsId } : "skip"
+  );
+
+  // Thumbs rating status for current track
+  const userThumbsRating = useQuery(api.users.getUserTrackRating,
+    userData && currentTrack 
+      ? { userId: userData._id, discogsId: currentTrack.discogsId }
+      : "skip"
+  );
+
+  const trackRatings = useQuery(api.users.getTrackRating,
+    currentTrack ? { discogsId: currentTrack.discogsId } : "skip"
+  );
+  
   const advanceTrack = useAction(api.radio.advanceToNextTrackWithContext);
   const getOrCreateUser = useMutation(api.users.getOrCreateUser);
+  const toggleLike = useMutation(api.users.toggleLike);
+  const toggleThumbsRating = useMutation(api.users.toggleThumbsRating);
   
   // Create user on first visit
   useEffect(() => {
@@ -270,6 +294,49 @@ export default function RadioPlayer({ isDarkMode }: RadioPlayerProps) {
         console.error("Error skipping track:", error);
         setPlaybackContinuity(false); // Reset on error
       }
+    }
+  };
+
+  const handleLike = async () => {
+    if (!userData || !currentTrack) return;
+    
+    try {
+      console.log('❤️ Toggling like for track:', currentTrack.title);
+      await toggleLike({
+        userId: userData._id,
+        trackInfo: {
+          discogsId: currentTrack.discogsId,
+          title: currentTrack.title,
+          artist: currentTrack.artist,
+          youtubeId: currentTrack.youtubeId,
+          year: currentTrack.year,
+          label: currentTrack.label,
+        },
+      });
+    } catch (error) {
+      console.error("Error toggling like:", error);
+    }
+  };
+
+  const handleThumbsRating = async (rating: "up" | "down") => {
+    if (!userData || !currentTrack) return;
+    
+    try {
+      console.log(`👍/👎 Toggling thumbs ${rating} for track:`, currentTrack.title);
+      await toggleThumbsRating({
+        userId: userData._id,
+        trackInfo: {
+          discogsId: currentTrack.discogsId,
+          title: currentTrack.title,
+          artist: currentTrack.artist,
+          youtubeId: currentTrack.youtubeId,
+          year: currentTrack.year,
+          label: currentTrack.label,
+        },
+        rating,
+      });
+    } catch (error) {
+      console.error("Error toggling thumbs rating:", error);
     }
   };
 
@@ -572,6 +639,159 @@ export default function RadioPlayer({ isDarkMode }: RadioPlayerProps) {
 
       </div>
 
+      {/* Rating Buttons - Above Controls */}
+      {user && (
+        <motion.div
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.4 }}
+          className="flex flex-col items-center mb-6 gap-3"
+        >
+          {/* Horizontal Button Layout: Thumbs Up | Heart | Thumbs Down */}
+          <div className="flex items-center gap-4">
+            {/* Thumbs Up Button */}
+            <motion.button 
+              className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 ${
+                isDarkMode 
+                  ? userThumbsRating === "up"
+                    ? 'backdrop-blur-xl bg-gradient-to-br from-green-500/30 to-green-600/20 text-green-400 hover:from-green-500/40 hover:to-green-600/30 shadow-xl' 
+                    : 'backdrop-blur-xl bg-gradient-to-br from-white/20 to-white/10 text-white/70 hover:from-white/25 hover:to-white/15 hover:text-white shadow-xl'
+                  : userThumbsRating === "up"
+                    ? 'backdrop-blur-xl bg-gradient-to-br from-green-500/20 to-green-600/10 text-green-600 hover:from-green-500/30 hover:to-green-600/20 shadow-xl'
+                    : 'backdrop-blur-xl bg-gradient-to-br from-black/3 to-black/8 text-black/70 hover:from-black/5 hover:to-black/10 hover:text-black shadow-xl'
+              }`}
+              onClick={() => handleThumbsRating("up")}
+              disabled={!currentTrack || !userData}
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+              title="Rate track positively"
+            >
+              <svg 
+                width="16" 
+                height="16" 
+                viewBox="0 0 24 24" 
+                fill={userThumbsRating === "up" ? "currentColor" : "none"} 
+                xmlns="http://www.w3.org/2000/svg"
+                className="transition-all duration-300"
+              >
+                <path 
+                  d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" 
+                  stroke="currentColor" 
+                  strokeWidth="2" 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </motion.button>
+
+            {/* Heart/Save Button */}
+            <motion.button 
+              className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 ${
+                isDarkMode 
+                  ? isLiked 
+                    ? 'backdrop-blur-xl bg-gradient-to-br from-red-500/30 to-red-600/20 text-red-400 hover:from-red-500/40 hover:to-red-600/30 shadow-xl' 
+                    : 'backdrop-blur-xl bg-gradient-to-br from-white/25 to-white/15 text-white/90 hover:from-white/30 hover:to-white/20 hover:text-white shadow-xl'
+                  : isLiked
+                    ? 'backdrop-blur-xl bg-gradient-to-br from-red-500/20 to-red-600/10 text-red-500 hover:from-red-500/30 hover:to-red-600/20 shadow-xl'
+                    : 'backdrop-blur-xl bg-gradient-to-br from-black/5 to-black/10 text-black/90 hover:from-black/5 hover:to-black/10 hover:text-black shadow-xl'
+              }`}
+              onClick={handleLike}
+              disabled={!currentTrack || !userData}
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+              title={isLiked ? "Unlike track" : "Like track"}
+            >
+              <svg 
+                width="20" 
+                height="20" 
+                viewBox="0 0 24 24" 
+                fill={isLiked ? "currentColor" : "none"} 
+                xmlns="http://www.w3.org/2000/svg"
+                className="transition-all duration-300"
+              >
+                <path 
+                  d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" 
+                  stroke="currentColor" 
+                  strokeWidth="2" 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </motion.button>
+
+            {/* Thumbs Down Button */}
+            <motion.button 
+              className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 ${
+                isDarkMode 
+                  ? userThumbsRating === "down"
+                    ? 'backdrop-blur-xl bg-gradient-to-br from-red-500/30 to-red-600/20 text-red-400 hover:from-red-500/40 hover:to-red-600/30 shadow-xl' 
+                    : 'backdrop-blur-xl bg-gradient-to-br from-white/20 to-white/10 text-white/70 hover:from-white/25 hover:to-white/15 hover:text-white shadow-xl'
+                  : userThumbsRating === "down"
+                    ? 'backdrop-blur-xl bg-gradient-to-br from-red-500/20 to-red-600/10 text-red-600 hover:from-red-500/30 hover:to-red-600/20 shadow-xl'
+                    : 'backdrop-blur-xl bg-gradient-to-br from-black/3 to-black/8 text-black/70 hover:from-black/5 hover:to-black/10 hover:text-black shadow-xl'
+              }`}
+              onClick={() => handleThumbsRating("down")}
+              disabled={!currentTrack || !userData}
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+              title="Rate track negatively"
+            >
+              <svg 
+                width="16" 
+                height="16" 
+                viewBox="0 0 24 24" 
+                fill={userThumbsRating === "down" ? "currentColor" : "none"} 
+                xmlns="http://www.w3.org/2000/svg"
+                className="transition-all duration-300"
+              >
+                <path 
+                  d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" 
+                  stroke="currentColor" 
+                  strokeWidth="2" 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </motion.button>
+          </div>
+
+          {/* Rating Counts Row */}
+          <div className="flex items-center gap-6 text-xs font-medium">
+            {/* Thumbs Up Count */}
+            <div className="flex items-center justify-center w-6">
+              {trackRatings && trackRatings.thumbsUp > 0 && (
+                <span className={`transition-colors duration-300 ${
+                  isDarkMode ? 'text-green-400/80' : 'text-green-600/80'
+                }`}>
+                  {trackRatings.thumbsUp}
+                </span>
+              )}
+            </div>
+
+            {/* Heart Count */}
+            <div className="flex items-center justify-center w-6">
+              {likeCount && likeCount > 0 && (
+                <span className={`transition-colors duration-300 ${
+                  isDarkMode ? 'text-white/70' : 'text-black/70'
+                }`}>
+                  {likeCount}
+                </span>
+              )}
+            </div>
+
+            {/* Thumbs Down Count */}
+            <div className="flex items-center justify-center w-6">
+              {trackRatings && trackRatings.thumbsDown > 0 && (
+                <span className={`transition-colors duration-300 ${
+                  isDarkMode ? 'text-red-400/80' : 'text-red-600/80'
+                }`}>
+                  {trackRatings.thumbsDown}
+                </span>
+              )}
+            </div>
+          </div>
+        </motion.div>
+      )}
 
       {/* Play Controls */}
       <motion.div
