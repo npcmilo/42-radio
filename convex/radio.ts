@@ -563,10 +563,91 @@ export const addToQueue = mutation({
   },
 });
 
+// Get a random track from history for fallback playback
+export const getRandomHistoryTrack = query({
+  args: {
+    hoursBack: v.optional(v.number()), // Minimum hours since last play
+    excludeRecent: v.optional(v.number()), // Exclude N most recent tracks
+  },
+  handler: async (ctx, args) => {
+    const startTime = Date.now();
+    const hoursBack = args.hoursBack || 24; // Default to tracks older than 24 hours
+    const excludeRecent = args.excludeRecent || 50; // Default exclude last 50 tracks
+    const cutoffTime = Date.now() - (hoursBack * 60 * 60 * 1000);
+    
+    try {
+      // Get all history tracks older than cutoff
+      const eligibleTracks = await ctx.db
+        .query("history")
+        .filter((q) => q.lt(q.field("playedAt"), cutoffTime))
+        .order("desc")
+        .collect();
+
+      if (eligibleTracks.length === 0) {
+        // If no old tracks, get any tracks excluding the most recent ones
+        const allHistory = await ctx.db
+          .query("history")
+          .order("desc")
+          .take(200); // Get more tracks to have selection variety
+        
+        // Skip the most recent tracks
+        const fallbackTracks = allHistory.slice(excludeRecent);
+        
+        if (fallbackTracks.length === 0) {
+          await logToDatabase(ctx, logger.warn("No history tracks available for fallback", {
+            duration_ms: Date.now() - startTime,
+            totalHistorySize: allHistory.length,
+          }));
+          return null;
+        }
+        
+        // Select a random track from fallback
+        const randomIndex = Math.floor(Math.random() * fallbackTracks.length);
+        const selectedTrack = fallbackTracks[randomIndex];
+        
+        await logToDatabase(ctx, logger.info("Selected fallback track from recent history", {
+          duration_ms: Date.now() - startTime,
+          trackId: selectedTrack.discogsId,
+          title: selectedTrack.title,
+          artist: selectedTrack.artist,
+          lastPlayedAt: selectedTrack.playedAt,
+          fallbackPoolSize: fallbackTracks.length,
+        }));
+        
+        return selectedTrack;
+      }
+      
+      // Select a random track from eligible tracks
+      const randomIndex = Math.floor(Math.random() * eligibleTracks.length);
+      const selectedTrack = eligibleTracks[randomIndex];
+      
+      const duration = Date.now() - startTime;
+      await logToDatabase(ctx, logger.info("Selected history track for fallback", {
+        duration_ms: duration,
+        trackId: selectedTrack.discogsId,
+        title: selectedTrack.title,
+        artist: selectedTrack.artist,
+        lastPlayedAt: selectedTrack.playedAt,
+        hoursAgo: Math.floor((Date.now() - selectedTrack.playedAt) / (1000 * 60 * 60)),
+        eligiblePoolSize: eligibleTracks.length,
+      }));
+      
+      return selectedTrack;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      await logToDatabase(ctx, logger.error("getRandomHistoryTrack query failed", {
+        duration_ms: duration,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      throw error;
+    }
+  },
+});
+
 // Move the next track from queue to currentTrack
 export const advanceToNextTrack = mutation({
   args: {},
-  handler: async (ctx) => {
+  handler: async (ctx): Promise<string | null> => {
     const startTime = Date.now();
     
     try {
@@ -577,11 +658,75 @@ export const advanceToNextTrack = mutation({
         .order("asc")
         .first();
 
+      // If no track in queue, try to use history as fallback
       if (!nextTrack) {
-        await logToDatabase(ctx, logger.warn("No tracks in queue to advance", {
+        await logToDatabase(ctx, logger.warn("No tracks in queue, attempting history fallback", {
           duration_ms: Date.now() - startTime,
         }));
-        return null;
+        
+        // Get a random track from history
+        const historyTrack = await ctx.runQuery(api.radio.getRandomHistoryTrack, {
+          hoursBack: 24,
+          excludeRecent: 50,
+        });
+        
+        if (!historyTrack) {
+          await logToDatabase(ctx, logger.error("No tracks available in queue or history", {
+            duration_ms: Date.now() - startTime,
+          }));
+          return null;
+        }
+        
+        // Move current track to history if it exists
+        const currentTrack = await ctx.db
+          .query("currentTrack")
+          .first();
+
+        if (currentTrack) {
+          await ctx.db.insert("history", {
+            discogsId: currentTrack.discogsId,
+            title: currentTrack.title,
+            artist: currentTrack.artist,
+            youtubeId: currentTrack.youtubeId,
+            durationSeconds: currentTrack.durationSeconds,
+            playedAt: currentTrack.startedAt,
+          });
+
+          // Delete the old current track
+          await ctx.db.delete(currentTrack._id);
+        }
+        
+        // Set the history track as current (with new startedAt time)
+        const newCurrentTrackId = await ctx.db.insert("currentTrack", {
+          discogsId: historyTrack.discogsId,
+          title: historyTrack.title,
+          artist: historyTrack.artist,
+          youtubeId: historyTrack.youtubeId,
+          durationSeconds: historyTrack.durationSeconds,
+          startedAt: Date.now(),
+          // Note: transition audio will be regenerated if needed
+        });
+        
+        // Update the history entry to track the replay
+        await ctx.db.patch(historyTrack._id, {
+          replayCount: (historyTrack.replayCount || 0) + 1,
+          lastReplayedAt: Date.now(),
+        });
+        
+        const duration = Date.now() - startTime;
+        await logToDatabase(ctx, logger.warn("Using history fallback for playback", {
+          duration_ms: duration,
+          newTrackId: newCurrentTrackId,
+          discogsId: historyTrack.discogsId,
+          title: historyTrack.title,
+          artist: historyTrack.artist,
+          lastPlayedAt: historyTrack.playedAt,
+          hoursAgo: Math.floor((Date.now() - historyTrack.playedAt) / (1000 * 60 * 60)),
+          isHistoryFallback: true,
+          replayCount: (historyTrack.replayCount || 0) + 1,
+        }));
+        
+        return newCurrentTrackId;
       }
 
       // Move current track to history if it exists

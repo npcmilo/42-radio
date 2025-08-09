@@ -23,6 +23,7 @@ import type * as radio from "../radio.js";
 import type * as scriptGenerator from "../scriptGenerator.js";
 import type * as testApiRotation from "../testApiRotation.js";
 import type * as testTransition from "../testTransition.js";
+import type * as testing from "../testing.js";
 import type * as trackMonitor from "../trackMonitor.js";
 import type * as users from "../users.js";
 import type * as youtube from "../youtube.js";
@@ -48,6 +49,7 @@ declare const fullApi: ApiFromModules<{
   scriptGenerator: typeof scriptGenerator;
   testApiRotation: typeof testApiRotation;
   testTransition: typeof testTransition;
+  testing: typeof testing;
   trackMonitor: typeof trackMonitor;
   users: typeof users;
   youtube: typeof youtube;

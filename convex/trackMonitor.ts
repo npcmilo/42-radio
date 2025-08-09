@@ -57,17 +57,45 @@ export const checkAndAdvanceTrack = action({
         const newTrackId: any = await ctx.runAction(api.radio.advanceToNextTrackWithContext);
         
         if (newTrackId) {
+          // Check if we're using history fallback by checking queue status
+          const queueStatus = await ctx.runQuery(api.radio.getQueueStatus);
+          const usingFallback = queueStatus.queueLength === 0;
+          
+          if (usingFallback) {
+            await logToDatabase(ctx, logger.warn("Advanced using history fallback, triggering emergency queue replenishment", {
+              previousTrack: currentTrack.discogsId,
+              newTrackId,
+            }));
+            
+            // Trigger emergency queue replenishment
+            ctx.runAction(api.queueManager.discoverAndQueueTracks, {
+              count: 50, // Add a good number of tracks
+              forceRefresh: false,
+            }).catch(error => {
+              logToDatabase(ctx, logger.error("Emergency queue replenishment failed", {
+                error: error instanceof Error ? error.message : String(error),
+              }));
+            });
+          }
+          
           return { 
             action: "advanced", 
             previousTrack: currentTrack.discogsId,
             newTrackId,
             expiredByMs: Math.abs(timeRemaining),
+            usingHistoryFallback: usingFallback,
           };
         } else {
+          await logToDatabase(ctx, logger.error("Track advancement completely failed", {
+            reason: "no_tracks_available",
+            previousTrack: currentTrack.discogsId,
+          }));
+          
           return { 
             action: "advance_failed", 
-            reason: "no_tracks_in_queue",
+            reason: "no_tracks_available",
             previousTrack: currentTrack.discogsId,
+            critical: true,
           };
         }
       }

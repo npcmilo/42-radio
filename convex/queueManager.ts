@@ -169,6 +169,32 @@ export const maintainQueue = action({
         targetQueueSize: TARGET_QUEUE_SIZE,
         hasCurrentTrack: queueStatus.hasCurrentTrack,
       }));
+      
+      // Emergency check: If queue is completely empty, this is critical
+      if (queueStatus.queueLength === 0) {
+        await logToDatabase(ctx, logger.error("CRITICAL: Queue is empty, system using history fallback", {
+          immediateAction: "emergency_replenishment",
+        }));
+        
+        // Emergency replenishment with larger batch
+        const emergencyResult: any = await ctx.runAction(api.queueManager.discoverAndQueueTracks, {
+          count: 100, // Large emergency batch
+          forceRefresh: false,
+        });
+        
+        await logToDatabase(ctx, logger.warn("Emergency queue replenishment completed", {
+          tracksAdded: emergencyResult.added,
+          newQueueSize: emergencyResult.added,
+          wasEmergency: true,
+        }));
+        
+        return {
+          action: "emergency_replenishment",
+          queueSizeBefore: 0,
+          queueSizeAfter: emergencyResult.added,
+          ...emergencyResult,
+        };
+      }
 
       // If queue is below target size, add tracks to reach target + buffer
       if (queueStatus.queueLength < TARGET_QUEUE_SIZE) {
@@ -349,6 +375,15 @@ export const clearQueue = action({
   },
 });
 
+// Check if system is using history fallback
+export const isUsingHistoryFallback = action({
+  args: {},
+  handler: async (ctx): Promise<boolean> => {
+    const queueStatus = await ctx.runQuery(api.radio.getQueueStatus);
+    return queueStatus.queueLength === 0 && queueStatus.hasCurrentTrack;
+  },
+});
+
 // Get queue health metrics
 export const getQueueHealth = action({
   args: {},
@@ -357,6 +392,9 @@ export const getQueueHealth = action({
       const queueStatus: any = await ctx.runQuery(api.radio.getQueueStatus);
       const queue: any = await ctx.runQuery(api.radio.getQueue, { limit: 50 });
 
+      // Check if using history fallback
+      const usingHistoryFallback = queueStatus.queueLength === 0 && queueStatus.hasCurrentTrack;
+      
       // Calculate health metrics
       const health: any = {
         queueLength: queueStatus.queueLength,
@@ -365,6 +403,7 @@ export const getQueueHealth = action({
         needsReplenishment: queueStatus.queueLength < TARGET_QUEUE_SIZE,
         isCritical: queueStatus.queueLength < MIN_QUEUE_SIZE,
         isOverfull: queueStatus.queueLength > MAX_QUEUE_SIZE,
+        usingHistoryFallback,
         estimatedPlaytimeMinutes: 0,
         oldestTrackAge: 0,
         newestTrackAge: 0,
