@@ -539,6 +539,26 @@ export const addToQueue = mutation({
         transitionAudioUrl: args.transitionAudioUrl,
       });
 
+      // Upsert into library to ensure canonical storage
+      try {
+        // @ts-ignore Generated API may not include library locally until Convex codegen runs
+        await ctx.runMutation(api.library.upsertTrack, {
+          discogsId: args.discogsId,
+          youtubeId: args.youtubeId,
+          artist: args.artist,
+          title: args.title,
+          durationSeconds: args.durationSeconds,
+          year: args.year,
+          label: args.label,
+        });
+      } catch (e) {
+        await logToDatabase(ctx, logger.warn("Library upsert failed during addToQueue", {
+          discogsId: args.discogsId,
+          youtubeId: args.youtubeId,
+          error: e instanceof Error ? e.message : String(e),
+        }));
+      }
+
       const duration = Date.now() - startTime;
       await logToDatabase(ctx, logger.info("Track added to queue", {
         duration_ms: duration,

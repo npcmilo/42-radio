@@ -132,4 +132,151 @@ export default defineSchema({
   })
     .index("by_key_and_date", ["keyId", "date"]) // For daily usage lookup
     .index("by_date", ["date"]), // For cleanup and analytics
+
+  // Canonical track library with analysis lifecycle and summary
+  library: defineTable({
+    // Identity / core metadata
+    discogsId: v.string(),
+    youtubeId: v.string(),
+    artist: v.string(),
+    title: v.string(),
+    durationSeconds: v.optional(v.number()),
+    year: v.optional(v.number()),
+    label: v.optional(v.string()),
+    // ... existing fields ... (room for enrichment like year/label/genres)
+
+    // Analysis lifecycle
+    analysisStatus: v.optional(
+      v.union(
+        v.literal("queued"),
+        v.literal("processing"),
+        v.literal("complete"),
+        v.literal("error")
+      )
+    ),
+    analysisVersion: v.optional(v.string()),
+    lastAnalyzedAt: v.optional(v.number()),
+    analysisError: v.optional(
+      v.object({
+        code: v.string(),
+        message: v.string(),
+        at: v.number(),
+      })
+    ),
+
+    // Fast-to-read summary (no big arrays)
+    analysisSummary: v.optional(
+      v.object({
+        bpm: v.number(),
+        bpmConfidence: v.optional(v.number()),
+        key: v.string(), // e.g. "Am" or "C# major"
+        keyConfidence: v.optional(v.number()),
+        energy: v.optional(v.number()), // normalized 0-1 (RMS z-score)
+        loudnessLufs: v.optional(v.number()),
+        spectralBalance: v.optional(
+          v.object({ low: v.number(), mid: v.number(), high: v.number() })
+        ),
+        vocals: v.optional(
+          v.object({ present: v.boolean(), confidence: v.number() })
+        ),
+        drops: v.optional(v.array(v.number())), // seconds
+        sections: v.optional(
+          v.array(
+            v.object({
+              start: v.number(),
+              duration: v.number(),
+              label: v.optional(v.string()),
+              confidence: v.optional(v.number()),
+            })
+          )
+        ),
+        analyzer: v.object({ name: v.string(), version: v.string() }),
+      })
+    ),
+
+    // Optional pointer to detailed record
+    analysisId: v.optional(v.id("audioAnalyses")),
+  })
+    .index("byYoutubeId", ["youtubeId"])
+    .index("byAnalysisStatus", ["analysisStatus"]),
+
+  // Detailed audio analyses stored separately to keep library small and fast
+  audioAnalyses: defineTable({
+    libraryId: v.id("library"),
+    youtubeId: v.string(),
+    analysisVersion: v.string(),
+    analyzedAt: v.number(),
+    audioHash: v.optional(v.string()),
+    sampleRate: v.optional(v.number()),
+    channels: v.optional(v.number()),
+    processingMs: v.optional(v.number()),
+    analyzer: v.object({ name: v.string(), version: v.string() }),
+
+    // Core features
+    bpm: v.object({
+      value: v.number(),
+      confidence: v.optional(v.number()),
+      beatTimesBlobId: v.optional(v.id("_storage")),
+    }),
+    key: v.object({
+      value: v.string(),
+      scale: v.optional(v.string()),
+      confidence: v.optional(v.number()),
+    }),
+    energy: v.optional(v.number()),
+    loudness: v.optional(
+      v.object({
+        integratedLufs: v.number(),
+        loudnessRangeLufs: v.optional(v.number()),
+        momentaryLufsBlobId: v.optional(v.id("_storage")),
+      })
+    ),
+    spectral: v.optional(
+      v.object({
+        centroidMean: v.optional(v.number()),
+        flatnessMean: v.optional(v.number()),
+        rolloffMean: v.optional(v.number()),
+        balance: v.optional(
+          v.object({ low: v.number(), mid: v.number(), high: v.number() })
+        ),
+      })
+    ),
+    timbre: v.optional(
+      v.object({
+        mfccMean: v.optional(v.array(v.number())),
+        mfccStd: v.optional(v.array(v.number())),
+      })
+    ),
+    harmony: v.optional(
+      v.object({
+        chromaMean: v.optional(v.array(v.number())),
+        inharmonicity: v.optional(v.number()),
+        harmonicRichness: v.optional(v.number()),
+      })
+    ),
+    vocals: v.optional(
+      v.object({
+        present: v.boolean(),
+        confidence: v.number(),
+        activityBlobId: v.optional(v.id("_storage")),
+      })
+    ),
+    sections: v.optional(
+      v.array(
+        v.object({
+          start: v.number(),
+          duration: v.number(),
+          label: v.optional(v.string()),
+          confidence: v.optional(v.number()),
+        })
+      )
+    ),
+    drops: v.optional(v.array(v.number())),
+
+    // Optional downsampled waveform/env in storage
+    waveformBlobId: v.optional(v.id("_storage")),
+  })
+    .index("byLibraryId", ["libraryId"])
+    .index("byYoutubeId", ["youtubeId"]) 
+    .index("byAnalyzedAt", ["analyzedAt"]),
 });

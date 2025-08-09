@@ -16,6 +16,7 @@ import type {
 import type * as crons from "../crons.js";
 import type * as discogs from "../discogs.js";
 import type * as elevenlabs from "../elevenlabs.js";
+import type * as library from "../library.js";
 import type * as logger from "../logger.js";
 import type * as maintenance from "../maintenance.js";
 import type * as queueManager from "../queueManager.js";
@@ -42,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   discogs: typeof discogs;
   elevenlabs: typeof elevenlabs;
+  library: typeof library;
   logger: typeof logger;
   maintenance: typeof maintenance;
   queueManager: typeof queueManager;

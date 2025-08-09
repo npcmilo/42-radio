@@ -81,6 +81,26 @@ export const discoverAndQueueTracks = action({
             continue;
           }
 
+          // Ensure this track is present in the canonical library (Discogs + YouTube)
+          try {
+            // @ts-ignore Generated API may not include library locally until Convex codegen runs
+            await ctx.runMutation(api.library.upsertTrack, {
+              discogsId: track.discogsId,
+              title: track.title,
+              artist: track.artist,
+              year: typeof track.year === 'string' ? parseInt(track.year) : track.year,
+              label: track.label,
+              youtubeId: youtubeMatch.videoId,
+              durationSeconds: youtubeMatch.durationSeconds,
+            });
+          } catch (e) {
+            await logToDatabase(ctx, logger.warn("Failed to upsert into library", {
+              discogsId: track.discogsId,
+              youtubeId: youtubeMatch.videoId,
+              error: e instanceof Error ? e.message : String(e),
+            }));
+          }
+
           // Skip transition audio generation during discovery
           // Transition audio will be generated with proper context when track is about to play
           await logToDatabase(ctx, logger.debug("Skipping transition audio during discovery", {
